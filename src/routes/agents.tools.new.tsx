@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { AppShell } from "@/components/app/AppShell";
+import { WizardShell } from "@/components/app/WizardShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -12,7 +12,7 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  ChevronRight, ChevronLeft, Plus, X, Trash2, Upload, Save, Boxes, ShieldCheck, ListTree, ArrowRightLeft, Zap,
+  ChevronRight, Plus, X, Trash2, Upload, Save, Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -77,13 +77,13 @@ const FIELD_TYPES: FieldType[] = ["Variable", "Constant"];
 const TRANSFORM_TYPES: TransformType[] = ["Constant", "Expression", "Template"];
 const ACTION_TYPES = ["HTTP API", "gRPC", "Internal function"] as const;
 
-const TABS = [
-  { id: "details", label: "Details", icon: Boxes },
-  { id: "definition", label: "Definition", icon: ShieldCheck },
-  { id: "inputschema", label: "Input Schema", icon: ListTree },
-  { id: "outputschema", label: "Output Schema", icon: ArrowRightLeft },
+const STEPS = [
+  { id: "details", label: "Details", hint: "Name & ownership" },
+  { id: "definition", label: "Definition", hint: "Endpoint & auth" },
+  { id: "inputschema", label: "Input Schema", hint: "Request fields" },
+  { id: "outputschema", label: "Output Schema", hint: "Response mapping" },
 ] as const;
-type TabId = (typeof TABS)[number]["id"];
+type TabId = (typeof STEPS)[number]["id"];
 
 let fieldSeq = 0;
 const newField = (): SchemaField => ({
@@ -132,8 +132,8 @@ function RegisterAction() {
   const [draft, setDraft] = useState<ActionDraft>(INITIAL);
   const [tab, setTab] = useState<TabId>("details");
 
-  const idx = TABS.findIndex((t) => t.id === tab);
-  const isLast = idx === TABS.length - 1;
+  const idx = STEPS.findIndex((t) => t.id === tab);
+  const isLast = idx === STEPS.length - 1;
 
   const set = <K extends keyof ActionDraft>(key: K, value: ActionDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
@@ -172,7 +172,7 @@ function RegisterAction() {
     return true;
   };
 
-  const goTo = (i: number) => setTab(TABS[Math.max(0, Math.min(TABS.length - 1, i))].id);
+  const goTo = (i: number) => setTab(STEPS[Math.max(0, Math.min(STEPS.length - 1, i))].id);
   const back = () => goTo(idx - 1);
   const next = () => {
     if (canAdvance()) goTo(idx + 1);
@@ -193,111 +193,62 @@ function RegisterAction() {
   };
 
   return (
-    <AppShell bare>
-      <div className="flex h-full flex-col">
-        {/* Top bar */}
-        <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
-          <div className="flex items-center gap-2 text-sm">
-            <Link to="/agents" search={{ tab: "tools" }} className="text-muted-foreground hover:text-foreground">Agents</Link>
-            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60" />
-            <Link to="/agents" search={{ tab: "tools" }} className="text-muted-foreground hover:text-foreground">Tools</Link>
-            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60" />
-            <span className="font-medium">{draft.name.trim() || "Register action"}</span>
-            <span className="ml-2 inline-flex items-center gap-1.5 rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">
-              <span className="h-1.5 w-1.5 rounded-full bg-warning" /> Draft
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Button variant="ghost" size="sm" className="h-8 text-xs" asChild>
-              <Link to="/agents" search={{ tab: "tools" }}>Cancel</Link>
-            </Button>
-            <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={saveDraft}>
-              <Save className="h-3.5 w-3.5" /> Save as Draft
-            </Button>
-          </div>
-        </header>
-
-        {/* Tab bar */}
-        <nav className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-4">
-          {TABS.map((t, i) => {
-            const active = t.id === tab;
-            const reachable = i <= idx || draft.name.trim().length > 1;
-            const Icon = t.icon;
-            return (
-              <button
-                key={t.id}
-                onClick={() => reachable && setTab(t.id)}
-                disabled={!reachable}
-                className={cn(
-                  "relative flex items-center gap-1.5 px-3 py-2.5 text-[13px] transition-colors",
-                  active ? "font-medium text-foreground" : reachable ? "text-muted-foreground hover:text-foreground" : "cursor-default text-muted-foreground/40",
-                )}
-              >
-                <span className={cn(
-                  "flex h-4.5 w-4.5 items-center justify-center rounded text-[10px] font-semibold",
-                  active ? "bg-foreground text-background" : "bg-muted text-muted-foreground",
-                )} style={{ height: 18, width: 18 }}>
-                  {i + 1}
-                </span>
-                <Icon className="h-3.5 w-3.5" />
-                {t.label}
-                {active && <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-foreground" />}
-              </button>
-            );
-          })}
-        </nav>
-
-        {/* Body */}
-        <section className="min-h-0 flex-1 overflow-y-auto px-8 py-8">
-          <div className="mx-auto w-full max-w-3xl space-y-6">
-            {tab === "details" && (
-              <DetailsTab draft={draft} set={set} addOwner={addOwner} removeOwner={removeOwner} />
-            )}
-            {tab === "definition" && <DefinitionTab draft={draft} set={set} />}
-            {tab === "inputschema" && (
-              <InputSchemaTab draft={draft} addField={addField} updateField={updateField} removeField={removeField} />
-            )}
-            {tab === "outputschema" && (
-              <OutputSchemaTab
-                draft={draft}
-                addField={addField}
-                updateField={updateField}
-                removeField={removeField}
-                addCustomField={addCustomField}
-                updateCustomField={updateCustomField}
-                removeCustomField={removeCustomField}
-              />
-            )}
-          </div>
-        </section>
-
-        {/* Footer */}
-        <footer className="flex h-14 shrink-0 items-center justify-between border-t border-border px-4">
-          <button
-            onClick={back}
-            disabled={idx === 0}
-            className={cn(
-              "inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-[12.5px]",
-              idx === 0 ? "cursor-default text-muted-foreground/40" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <ChevronLeft className="h-3.5 w-3.5" /> Previous Step
-          </button>
-          <p className="text-[11px] text-muted-foreground">
-            Step {idx + 1} of {TABS.length} · {TABS[idx].label}
-          </p>
-          {isLast ? (
-            <Button size="sm" className="h-8 gap-1.5 text-xs" disabled={draft.name.trim().length < 2} onClick={register}>
-              <Plus className="h-3.5 w-3.5" /> Register action
-            </Button>
-          ) : (
-            <Button size="sm" className="h-8 gap-1.5 text-xs" disabled={!canAdvance()} onClick={next}>
-              Next Step <ChevronRight className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </footer>
-      </div>
-    </AppShell>
+    <WizardShell
+      eyebrow="Register action"
+      breadcrumb={
+        <>
+          <Link to="/agents" search={{ tab: "tools" }} className="text-muted-foreground hover:text-foreground">Agents</Link>
+          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60" />
+          <Link to="/agents" search={{ tab: "tools" }} className="text-muted-foreground hover:text-foreground">Tools</Link>
+          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60" />
+          <span className="font-medium">{draft.name.trim() || "Register action"}</span>
+        </>
+      }
+      headerActions={
+        <>
+          <Button variant="ghost" size="sm" className="h-8 text-xs" asChild>
+            <Link to="/agents" search={{ tab: "tools" }}>Cancel</Link>
+          </Button>
+          <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={saveDraft}>
+            <Save className="h-3.5 w-3.5" /> Save as draft
+          </Button>
+        </>
+      }
+      steps={STEPS.map((s) => ({ id: s.id, label: s.label, hint: s.hint }))}
+      currentIndex={idx}
+      onStepSelect={goTo}
+      onBack={back}
+      footerActions={
+        isLast ? (
+          <Button size="sm" className="h-8 gap-1.5 text-xs" disabled={draft.name.trim().length < 2} onClick={register}>
+            <Plus className="h-3.5 w-3.5" /> Register action
+          </Button>
+        ) : (
+          <Button size="sm" className="h-8 gap-1.5 text-xs" disabled={!canAdvance()} onClick={next}>
+            Continue <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
+        )
+      }
+    >
+      {tab === "details" && (
+        <DetailsTab draft={draft} set={set} addOwner={addOwner} removeOwner={removeOwner} />
+      )}
+      {tab === "definition" && <DefinitionTab draft={draft} set={set} />}
+      {tab === "inputschema" && (
+        <InputSchemaTab draft={draft} addField={addField} updateField={updateField} removeField={removeField} />
+      )}
+      {tab === "outputschema" && (
+        <OutputSchemaTab
+          draft={draft}
+          addField={addField}
+          updateField={updateField}
+          removeField={removeField}
+          addCustomField={addCustomField}
+          updateCustomField={updateCustomField}
+          removeCustomField={removeCustomField}
+        />
+      )}
+    </WizardShell>
   );
 }
 

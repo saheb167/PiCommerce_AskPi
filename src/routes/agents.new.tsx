@@ -1,22 +1,21 @@
 import { useMemo, useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { AppShell } from "@/components/app/AppShell";
+import { WizardShell } from "@/components/app/WizardShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
-import { Slider } from "@/components/ui/slider";
 import {
   ChevronRight,
-  ChevronLeft,
   Check,
   Phone,
   MessageCircle,
   Bot,
   User,
   Rocket,
+  Save,
   Sparkles,
   AudioLines,
   Plus,
@@ -41,17 +40,14 @@ export const Route = createFileRoute("/agents/new")({
 /* --------------------------------------------------------- */
 
 type AgentType = "chat" | "voice";
-type StepId = "type" | "basics" | "voice" | "prompt" | "review" | "test";
+type StepId = "type" | "basics" | "prompt" | "review" | "test";
 
 type Draft = {
   type: AgentType | null;
   name: string;
   description: string;
   tones: string[];
-  languages: string[];
   voiceId: string;
-  speakingRate: number;
-  allowInterruptions: boolean;
   greeting: string;
   mission: string;
   intents: string[];
@@ -59,10 +55,11 @@ type Draft = {
   doText: string;
   dontText: string;
   escalateToHuman: boolean;
+  systemPrompt: string;
+  promptDirty: boolean;
 };
 
 const TONES = ["Warm", "Concise", "Formal", "Playful"] as const;
-const LANGUAGES = ["English", "Hindi", "Tamil", "Telugu", "Marathi"] as const;
 
 const VOICES = [
   { id: "aria", name: "Aria", desc: "Warm female · English + Hindi", accent: "Neutral Indian" },
@@ -76,10 +73,7 @@ const INITIAL: Draft = {
   name: "",
   description: "",
   tones: ["Warm", "Concise"],
-  languages: ["English", "Hindi"],
   voiceId: "aria",
-  speakingRate: 1,
-  allowInterruptions: true,
   greeting: "Hi! I'm here to help — what brings you in today?",
   mission:
     "Understand why the customer reached out, resolve it accurately on the first contact, and route anything high-value to a human.",
@@ -94,26 +88,25 @@ const INITIAL: Draft = {
   dontText:
     "• Never make investment recommendations\n• Never mention competitor brands\n• Never promise specific outcomes",
   escalateToHuman: true,
+  systemPrompt: "",
+  promptDirty: false,
 };
 
 /* --------------------------------------------------------- */
-/* Step plan (voice step only appears for voice agents)      */
-/* Testing is always the final step of the flow.             */
+/* Step plan. Voice agents configure their voice inside       */
+/* Basics. Testing is always the final step of the flow.      */
 /* --------------------------------------------------------- */
 
 const STEP_META: Record<StepId, { label: string; hint: string }> = {
   type: { label: "Agent type", hint: "Chat or voice" },
   basics: { label: "Basics", hint: "Name & personality" },
-  voice: { label: "Voice", hint: "Pick a voice" },
   prompt: { label: "Prompt", hint: "Intents & guardrails" },
   review: { label: "Review", hint: "Confirm the setup" },
   test: { label: "Test & deploy", hint: "Try it, then go live" },
 };
 
-function stepsFor(type: AgentType | null): StepId[] {
-  const base: StepId[] = ["type", "basics", "prompt", "review", "test"];
-  if (type === "voice") base.splice(2, 0, "voice");
-  return base;
+function stepsFor(_type: AgentType | null): StepId[] {
+  return ["type", "basics", "prompt", "review", "test"];
 }
 
 /* --------------------------------------------------------- */
@@ -132,7 +125,7 @@ function CreateAgent() {
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
 
-  const toggleIn = (key: "tones" | "languages", value: string) =>
+  const toggleIn = (key: "tones", value: string) =>
     setDraft((d) => {
       const arr = d[key];
       return { ...d, [key]: arr.includes(value) ? arr.filter((v) => v !== value) : [...arr, value] };
@@ -149,7 +142,6 @@ function CreateAgent() {
   const canAdvance = (): boolean => {
     if (current === "type") return draft.type !== null;
     if (current === "basics") return draft.name.trim().length > 1;
-    if (current === "voice") return draft.voiceId !== "";
     return true;
   };
 
@@ -166,122 +158,59 @@ function CreateAgent() {
     navigate({ to: "/agents" });
   };
 
+  const saveDraft = () => {
+    toast.success(`${draft.name.trim() || "Untitled agent"} saved as draft`, {
+      description: "You can finish setting it up later.",
+    });
+    navigate({ to: "/agents" });
+  };
+
+  const wizardSteps = steps.map((s) => ({ id: s, label: STEP_META[s].label, hint: STEP_META[s].hint }));
+
   return (
-    <AppShell bare>
-      <div className="flex h-full flex-col">
-        {/* Top bar — mirrors the agent detail builder header */}
-        <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
-          <div className="flex items-center gap-2 text-sm">
-            <Link to="/agents" className="text-muted-foreground hover:text-foreground">Agents</Link>
-            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60" />
-            <span className="font-medium">{draft.name.trim() || "New agent"}</span>
-            <span className="ml-2 inline-flex items-center gap-1.5 rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">
-              <span className="h-1.5 w-1.5 rounded-full bg-warning" /> Draft
-            </span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <Button variant="ghost" size="sm" className="h-8 text-xs" asChild>
-              <Link to="/agents">Cancel</Link>
-            </Button>
-            <Button
-              size="sm"
-              className="h-8 gap-1.5 text-xs"
-              disabled={!draft.name.trim() || !draft.type}
-              onClick={deploy}
-            >
-              <Rocket className="h-3.5 w-3.5" /> Deploy
-            </Button>
-          </div>
-        </header>
-
-        <div className="flex min-h-0 flex-1">
-          {/* Stepper rail */}
-          <aside className="w-[212px] shrink-0 border-r border-border px-2 py-3">
-            <p className="px-2 pb-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">Create agent</p>
-            <ul className="space-y-0.5">
-              {steps.map((s, i) => {
-                const active = i === idx;
-                const done = i < idx;
-                return (
-                  <li key={s}>
-                    <button
-                      onClick={() => i <= idx && setIdx(i)}
-                      disabled={i > idx}
-                      className={cn(
-                        "flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-[13px] transition-colors",
-                        active
-                          ? "bg-accent font-medium text-foreground"
-                          : done
-                            ? "text-foreground hover:bg-accent/50"
-                            : "cursor-default text-muted-foreground/60",
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold",
-                          active
-                            ? "border-foreground bg-foreground text-background"
-                            : done
-                              ? "border-success bg-success/10 text-success"
-                              : "border-border text-muted-foreground",
-                        )}
-                      >
-                        {done ? <Check className="h-3 w-3" /> : i + 1}
-                      </span>
-                      <span className="min-w-0">
-                        <span className="block truncate leading-tight">{STEP_META[s].label}</span>
-                        <span className="block truncate text-[10.5px] font-normal text-muted-foreground">{STEP_META[s].hint}</span>
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </aside>
-
-          {/* Form column — single, focused canvas (no side preview rail).
-              my-auto vertically centres short steps; tall steps scroll from the top. */}
-          <section className="flex flex-1 flex-col overflow-y-auto px-8 py-10">
-            <div className="mx-auto my-auto w-full max-w-2xl space-y-5">
-              {current === "type" && <TypeStep draft={draft} onPick={(t) => set("type", t)} />}
-              {current === "basics" && <BasicsStep draft={draft} set={set} toggleIn={toggleIn} />}
-              {current === "voice" && <VoiceStep draft={draft} set={set} />}
-              {current === "prompt" && (
-                <PromptStep draft={draft} set={set} addItem={addItem} removeItem={removeItem} />
-              )}
-              {current === "review" && <ReviewStep draft={draft} steps={steps} onJump={setIdx} />}
-              {current === "test" && <TestStep draft={draft} />}
-            </div>
-          </section>
-        </div>
-
-        {/* Footer nav */}
-        <footer className="flex h-14 shrink-0 items-center justify-between border-t border-border px-4">
-          <button
-            onClick={back}
-            disabled={idx === 0}
-            className={cn(
-              "inline-flex items-center gap-1 rounded-md px-2.5 py-1.5 text-[12.5px]",
-              idx === 0 ? "cursor-default text-muted-foreground/40" : "text-muted-foreground hover:text-foreground",
-            )}
-          >
-            <ChevronLeft className="h-3.5 w-3.5" /> Back
-          </button>
-          <p className="text-[11px] text-muted-foreground">
-            Step {idx + 1} of {steps.length} · {STEP_META[current].label}
-          </p>
-          {isLast ? (
-            <Button size="sm" className="h-8 gap-1.5 text-xs" disabled={!draft.name.trim()} onClick={deploy}>
-              <Rocket className="h-3.5 w-3.5" /> Deploy agent
-            </Button>
-          ) : (
-            <Button size="sm" className="h-8 gap-1.5 text-xs" disabled={!canAdvance()} onClick={next}>
-              Continue <ChevronRight className="h-3.5 w-3.5" />
-            </Button>
-          )}
-        </footer>
-      </div>
-    </AppShell>
+    <WizardShell
+      eyebrow="Create agent"
+      breadcrumb={
+        <>
+          <Link to="/agents" className="text-muted-foreground hover:text-foreground">Agents</Link>
+          <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60" />
+          <span className="font-medium">{draft.name.trim() || "New agent"}</span>
+        </>
+      }
+      headerActions={
+        <>
+          <Button variant="ghost" size="sm" className="h-8 text-xs" asChild>
+            <Link to="/agents">Cancel</Link>
+          </Button>
+          <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={saveDraft}>
+            <Save className="h-3.5 w-3.5" /> Save as draft
+          </Button>
+        </>
+      }
+      steps={wizardSteps}
+      currentIndex={idx}
+      onStepSelect={setIdx}
+      onBack={back}
+      footerActions={
+        isLast ? (
+          <Button size="sm" className="h-8 gap-1.5 text-xs" disabled={!draft.name.trim()} onClick={deploy}>
+            <Rocket className="h-3.5 w-3.5" /> Deploy agent
+          </Button>
+        ) : (
+          <Button size="sm" className="h-8 gap-1.5 text-xs" disabled={!canAdvance()} onClick={next}>
+            Continue <ChevronRight className="h-3.5 w-3.5" />
+          </Button>
+        )
+      }
+    >
+      {current === "type" && <TypeStep draft={draft} onPick={(t) => set("type", t)} />}
+      {current === "basics" && <BasicsStep draft={draft} set={set} toggleIn={toggleIn} />}
+      {current === "prompt" && (
+        <PromptStep draft={draft} set={set} addItem={addItem} removeItem={removeItem} />
+      )}
+      {current === "review" && <ReviewStep draft={draft} steps={steps} onJump={setIdx} />}
+      {current === "test" && <TestStep draft={draft} />}
+    </WizardShell>
   );
 }
 
@@ -376,7 +305,7 @@ function BasicsStep({
 }: {
   draft: Draft;
   set: <K extends keyof Draft>(k: K, v: Draft[K]) => void;
-  toggleIn: (k: "tones" | "languages", v: string) => void;
+  toggleIn: (k: "tones", v: string) => void;
 }) {
   return (
     <>
@@ -416,85 +345,34 @@ function BasicsStep({
           })}
         </div>
       </Field>
-      <Field label="Languages">
-        <div className="flex flex-wrap gap-1.5">
-          {LANGUAGES.map((l) => {
-            const on = draft.languages.includes(l);
-            return (
-              <button
-                key={l}
-                onClick={() => toggleIn("languages", l)}
-                className={cn(
-                  "rounded-full border px-2.5 py-1 text-[11.5px] transition-colors",
-                  on ? "border-foreground bg-accent" : "border-border text-muted-foreground hover:bg-accent/50",
-                )}
-              >
-                {l}
-              </button>
-            );
-          })}
-        </div>
-      </Field>
-    </>
-  );
-}
 
-function VoiceStep({
-  draft,
-  set,
-}: {
-  draft: Draft;
-  set: <K extends keyof Draft>(k: K, v: Draft[K]) => void;
-}) {
-  return (
-    <>
-      <SectionTitle title="Voice" desc="Choose the synthetic voice and how it speaks on calls." />
-      <Field label="Voice">
-        <div className="grid grid-cols-2 gap-2">
-          {VOICES.map((v) => {
-            const selected = draft.voiceId === v.id;
-            return (
-              <button
-                key={v.id}
-                onClick={() => set("voiceId", v.id)}
-                className={cn(
-                  "flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all",
-                  selected ? "border-ai/60 ring-2 ring-ai/20" : "border-border hover:border-ai/40",
-                )}
-              >
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ai/10 text-ai">
-                  <AudioLines className="h-4 w-4" />
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-[13px] font-medium">{v.name}</span>
-                  <span className="block truncate text-[11px] text-muted-foreground">{v.desc}</span>
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      </Field>
-      <Field label={`Speaking rate · ${draft.speakingRate.toFixed(2)}×`}>
-        <Slider
-          value={[draft.speakingRate]}
-          min={0.75}
-          max={1.5}
-          step={0.05}
-          onValueChange={([v]) => set("speakingRate", v)}
-        />
-        <div className="flex justify-between text-[10.5px] text-muted-foreground">
-          <span>Slower</span>
-          <span>Default</span>
-          <span>Faster</span>
-        </div>
-      </Field>
-      <div className="flex items-start justify-between gap-3 rounded-lg border border-border px-3 py-2.5">
-        <div>
-          <p className="text-[13px] font-medium">Allow interruptions (barge-in)</p>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Let callers cut in while the agent is speaking.</p>
-        </div>
-        <Switch checked={draft.allowInterruptions} onCheckedChange={(v) => set("allowInterruptions", v)} />
-      </div>
+      {draft.type === "voice" && (
+        <Field label="Voice">
+          <div className="grid grid-cols-2 gap-2">
+            {VOICES.map((v) => {
+              const selected = draft.voiceId === v.id;
+              return (
+                <button
+                  key={v.id}
+                  onClick={() => set("voiceId", v.id)}
+                  className={cn(
+                    "flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-all",
+                    selected ? "border-ai/60 ring-2 ring-ai/20" : "border-border hover:border-ai/40",
+                  )}
+                >
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ai/10 text-ai">
+                    <AudioLines className="h-4 w-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-[13px] font-medium">{v.name}</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">{v.desc}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+      )}
     </>
   );
 }
@@ -582,7 +460,7 @@ function PromptStep({
         <Switch checked={draft.escalateToHuman} onCheckedChange={(v) => set("escalateToHuman", v)} />
       </div>
 
-      <CompiledPrompt draft={draft} />
+      <CompiledPrompt draft={draft} set={set} />
     </>
   );
 }
@@ -655,7 +533,7 @@ function buildPrompt(draft: Draft): string {
   const parts: string[] = [];
   parts.push(`You are ${name}, a ${type} agent for Pi Commerce.`);
   if (draft.description.trim()) parts.push(`Persona: ${draft.description.trim()}`);
-  parts.push(`Tone: ${draft.tones.join(", ") || "neutral"}. Languages: ${draft.languages.join(", ") || "English"}.`);
+  parts.push(`Tone: ${draft.tones.join(", ") || "neutral"}.`);
 
   parts.push("", "OBJECTIVE", draft.mission.trim() || "Help the customer and capture their intent.");
 
@@ -679,18 +557,50 @@ function buildPrompt(draft: Draft): string {
   return parts.join("\n");
 }
 
-function CompiledPrompt({ draft }: { draft: Draft }) {
-  const text = useMemo(() => buildPrompt(draft), [draft]);
+function CompiledPrompt({
+  draft,
+  set,
+}: {
+  draft: Draft;
+  set: <K extends keyof Draft>(k: K, v: Draft[K]) => void;
+}) {
+  const generated = useMemo(() => buildPrompt(draft), [draft]);
+  // Auto-generate from the structured fields until the user takes manual control,
+  // after which their edited copy is shown until they regenerate.
+  const text = draft.promptDirty ? draft.systemPrompt : generated;
+
+  const regenerate = () => {
+    set("systemPrompt", "");
+    set("promptDirty", false);
+  };
+
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-secondary/30">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <Sparkles className="h-3.5 w-3.5 text-ai" />
-        <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Compiled system prompt</p>
-        <span className="ml-auto text-[10.5px] text-muted-foreground">auto-generated</span>
+        <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">System prompt</p>
+        <span className="ml-auto text-[10.5px] text-muted-foreground">
+          {draft.promptDirty ? "Edited" : "Auto-generated · editable"}
+        </span>
+        {draft.promptDirty && (
+          <button
+            type="button"
+            onClick={regenerate}
+            className="text-[10.5px] text-ai hover:underline"
+          >
+            Regenerate
+          </button>
+        )}
       </div>
-      <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap px-3 py-3 font-mono text-[12px] leading-relaxed text-foreground/90">
-        {text}
-      </pre>
+      <Textarea
+        value={text}
+        onChange={(e) => {
+          set("systemPrompt", e.target.value);
+          if (!draft.promptDirty) set("promptDirty", true);
+        }}
+        spellCheck={false}
+        className="max-h-72 min-h-56 resize-y rounded-none border-0 bg-transparent px-3 py-3 font-mono text-[12px] leading-relaxed text-foreground/90 focus-visible:ring-0"
+      />
     </div>
   );
 }
@@ -722,17 +632,11 @@ function ReviewStep({
       <SummaryCard title="Basics" onEdit={() => jumpTo("basics")}>
         <Row k="Name" v={draft.name.trim() || "—"} />
         <Row k="Tone" v={draft.tones.join(", ") || "—"} />
-        <Row k="Languages" v={draft.languages.join(", ") || "—"} />
+        {draft.type === "voice" && (
+          <Row k="Voice" v={VOICES.find((v) => v.id === draft.voiceId)?.name ?? "—"} />
+        )}
         {draft.description.trim() && <Row k="Persona" v={draft.description.trim()} />}
       </SummaryCard>
-
-      {draft.type === "voice" && (
-        <SummaryCard title="Voice" onEdit={() => jumpTo("voice")}>
-          <Row k="Voice" v={VOICES.find((v) => v.id === draft.voiceId)?.name ?? "—"} />
-          <Row k="Speaking rate" v={`${draft.speakingRate.toFixed(2)}×`} />
-          <Row k="Barge-in" v={draft.allowInterruptions ? "Enabled" : "Off"} />
-        </SummaryCard>
-      )}
 
       <SummaryCard title="Prompt configuration" onEdit={() => jumpTo("prompt")}>
         <Row k={draft.type === "voice" ? "Opening" : "Greeting"} v={draft.greeting} />
