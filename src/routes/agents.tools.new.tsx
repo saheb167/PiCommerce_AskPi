@@ -12,7 +12,7 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  ChevronRight, Plus, X, Trash2, Upload, Save, Zap,
+  ChevronRight, Plus, Trash2, Upload, Save, Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -56,8 +56,6 @@ type ActionDraft = {
   name: string;
   description: string;
   actionType: string;
-  owners: string[];
-  ownerInput: string;
   httpUri: string;
   connectTimeout: string;
   responseTimeout: string;
@@ -78,7 +76,7 @@ const TRANSFORM_TYPES: TransformType[] = ["Constant", "Expression", "Template"];
 const ACTION_TYPES = ["HTTP API", "gRPC", "Internal function"] as const;
 
 const STEPS = [
-  { id: "details", label: "Details", hint: "Name & ownership" },
+  { id: "details", label: "Details", hint: "Name & type" },
   { id: "definition", label: "Definition", hint: "Endpoint & auth" },
   { id: "inputschema", label: "Input Schema", hint: "Request fields" },
   { id: "outputschema", label: "Output Schema", hint: "Response mapping" },
@@ -107,8 +105,6 @@ const INITIAL: ActionDraft = {
   name: "",
   description: "",
   actionType: "HTTP API",
-  owners: [],
-  ownerInput: "",
   httpUri: "",
   connectTimeout: "20000",
   responseTimeout: "20000",
@@ -137,15 +133,6 @@ function RegisterAction() {
 
   const set = <K extends keyof ActionDraft>(key: K, value: ActionDraft[K]) =>
     setDraft((d) => ({ ...d, [key]: value }));
-
-  const addOwner = () =>
-    setDraft((d) => {
-      const v = d.ownerInput.trim();
-      if (!v || d.owners.includes(v)) return { ...d, ownerInput: "" };
-      return { ...d, owners: [...d.owners, v], ownerInput: "" };
-    });
-  const removeOwner = (o: string) =>
-    setDraft((d) => ({ ...d, owners: d.owners.filter((x) => x !== o) }));
 
   const addField = (listKey: SchemaListKey) =>
     setDraft((d) => ({ ...d, [listKey]: [...d[listKey], newField()] }));
@@ -230,9 +217,7 @@ function RegisterAction() {
         )
       }
     >
-      {tab === "details" && (
-        <DetailsTab draft={draft} set={set} addOwner={addOwner} removeOwner={removeOwner} />
-      )}
+      {tab === "details" && <DetailsTab draft={draft} set={set} />}
       {tab === "definition" && <DefinitionTab draft={draft} set={set} />}
       {tab === "inputschema" && (
         <InputSchemaTab draft={draft} addField={addField} updateField={updateField} removeField={removeField} />
@@ -257,16 +242,14 @@ function RegisterAction() {
 /* --------------------------------------------------------- */
 
 function DetailsTab({
-  draft, set, addOwner, removeOwner,
+  draft, set,
 }: {
   draft: ActionDraft;
   set: <K extends keyof ActionDraft>(key: K, value: ActionDraft[K]) => void;
-  addOwner: () => void;
-  removeOwner: (o: string) => void;
 }) {
   return (
     <>
-      <TabHeading title="Action Details" desc="Identify the action and who owns it." />
+      <TabHeading title="Action Details" desc="Identify the action." />
 
       <FormField label="Action name" required>
         <Input
@@ -295,34 +278,6 @@ function DetailsTab({
             ))}
           </SelectContent>
         </Select>
-      </FormField>
-
-      <FormField label="Action owners">
-        <div className="flex gap-2">
-          <Input
-            value={draft.ownerInput}
-            onChange={(e) => set("ownerInput", e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addOwner(); } }}
-            placeholder="name@company.com"
-            className="h-9 max-w-xs text-sm"
-            type="email"
-          />
-          <Button variant="outline" size="sm" className="h-9 gap-1.5 text-xs" onClick={addOwner}>
-            <Plus className="h-3.5 w-3.5" /> Add Owner
-          </Button>
-        </div>
-        {draft.owners.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {draft.owners.map((o) => (
-              <span key={o} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-secondary/40 py-1 pl-2.5 pr-1.5 text-[12px]">
-                {o}
-                <button onClick={() => removeOwner(o)} className="rounded-full p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground">
-                  <X className="h-3 w-3" />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
       </FormField>
     </>
   );

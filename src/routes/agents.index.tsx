@@ -13,7 +13,7 @@ import {
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Plus, Phone, MessageCircle, Wrench, Search, MoreHorizontal, Workflow, Archive, Copy, Check, KeyRound } from "lucide-react";
+import { Plus, Phone, MessageCircle, Wrench, Search, MoreHorizontal, Workflow, Archive, Copy, Check, KeyRound, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -208,7 +208,7 @@ function Builder() {
                             onClick={() => navigate({ to: "/agents/$id", params: { id: a.id } })}
                             className="gap-2 text-xs"
                           >
-                            <Workflow className="h-3.5 w-3.5" /> Open
+                            <Pencil className="h-3.5 w-3.5" /> Edit
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => handleArchive(a)}
@@ -372,7 +372,9 @@ function Tools() {
                   </td>
                   <td className="px-4 py-3 text-right font-mono text-[12px] text-muted-foreground">{t.usage}</td>
                   <td className="px-2 py-3 text-right">
-                    <button className="text-[12px] text-foreground hover:underline">Manage</button>
+                    <Link to="/agents/tools/new" className="inline-flex items-center gap-1 text-[12px] text-foreground hover:underline">
+                      <Pencil className="h-3 w-3" /> Edit
+                    </Link>
                   </td>
                 </tr>
               ))}

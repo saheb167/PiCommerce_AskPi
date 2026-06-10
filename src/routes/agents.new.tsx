@@ -5,7 +5,6 @@ import { WizardShell } from "@/components/app/WizardShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import {
   ChevronRight,
@@ -54,7 +53,6 @@ type Draft = {
   signals: string[];
   doText: string;
   dontText: string;
-  escalateToHuman: boolean;
   systemPrompt: string;
   promptDirty: boolean;
 };
@@ -87,7 +85,6 @@ const INITIAL: Draft = {
     "• Acknowledge the user's intent before answering\n• Confirm the details you captured back to them\n• Keep answers short and actionable",
   dontText:
     "• Never make investment recommendations\n• Never mention competitor brands\n• Never promise specific outcomes",
-  escalateToHuman: true,
   systemPrompt: "",
   promptDirty: false,
 };
@@ -452,14 +449,6 @@ function PromptStep({
         <Textarea value={draft.dontText} onChange={(e) => set("dontText", e.target.value)} className="min-h-24 resize-none text-sm" />
       </Field>
 
-      <div className="flex items-start justify-between gap-3 rounded-lg border border-border px-3 py-2.5">
-        <div>
-          <p className="text-[13px] font-medium">Escalate to a human</p>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Route negative sentiment, high-value, or compliance intents to an operator.</p>
-        </div>
-        <Switch checked={draft.escalateToHuman} onCheckedChange={(v) => set("escalateToHuman", v)} />
-      </div>
-
       <CompiledPrompt draft={draft} set={set} />
     </>
   );
@@ -547,12 +536,6 @@ function buildPrompt(draft: Draft): string {
   }
   if (draft.doText.trim()) parts.push("", "ALWAYS", draft.doText.trim());
   if (draft.dontText.trim()) parts.push("", "NEVER", draft.dontText.trim());
-  if (draft.escalateToHuman) {
-    parts.push(
-      "",
-      "Escalate to a human when an intent involves negative sentiment, a high-value account, or a compliance matter.",
-    );
-  }
   parts.push("", `Open with: "${draft.greeting.trim()}"`);
   return parts.join("\n");
 }
@@ -643,7 +626,6 @@ function ReviewStep({
         <Row k="Objective" v={draft.mission} />
         <Row k="Intents" v={draft.intents.join(", ") || "None"} />
         <Row k="Signals" v={draft.signals.join(", ") || "None"} />
-        <Row k="Human escalation" v={draft.escalateToHuman ? "On" : "Off"} />
       </SummaryCard>
     </>
   );
@@ -670,7 +652,7 @@ function TestStep({ draft }: { draft: Draft }) {
 }
 
 function TestConsole({ draft }: { draft: Draft }) {
-  const [mode, setMode] = useState<AgentType>(draft.type ?? "chat");
+  const isVoice = draft.type === "voice";
   const [msgs, setMsgs] = useState<{ who: "user" | "bot"; text: string }[]>(() => [
     { who: "bot", text: draft.greeting.trim() || "Hi! How can I help?" },
   ]);
@@ -684,7 +666,7 @@ function TestConsole({ draft }: { draft: Draft }) {
     const reply =
       `Thanks — I've classified this as "${intent}"` +
       (signal ? ` and captured ${signal.toLowerCase()}.` : ".") +
-      (draft.escalateToHuman ? " If it turns high-value, I'll bring in a human." : " Let me resolve it for you.");
+      " Let me resolve it for you.";
     setMsgs((m) => [...m, { who: "user", text }, { who: "bot", text: reply }]);
     setInput("");
   };
@@ -696,26 +678,13 @@ function TestConsole({ draft }: { draft: Draft }) {
           <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Sandbox</p>
           <h3 className="text-sm font-semibold">Test playground</h3>
         </div>
-        <div className="flex items-center gap-0.5 rounded-md border border-border bg-background p-0.5 text-[11px]">
-          {(["chat", "voice"] as const).map((m) => (
-            <button
-              key={m}
-              onClick={() => setMode(m)}
-              className={cn("rounded px-2 py-1 capitalize", mode === m ? "bg-accent font-medium" : "text-muted-foreground")}
-            >
-              {m === "voice" ? (
-                <span className="inline-flex items-center gap-1">
-                  <Phone className="h-3 w-3" /> Voice
-                </span>
-              ) : (
-                "Chat"
-              )}
-            </button>
-          ))}
-        </div>
+        <span className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-[11px] capitalize text-muted-foreground">
+          {isVoice ? <Phone className="h-3 w-3 text-ai" /> : <MessageCircle className="h-3 w-3 text-success" />}
+          {isVoice ? "Voice" : "Chat"}
+        </span>
       </div>
 
-      {mode === "chat" ? (
+      {!isVoice ? (
         <>
           <div className="h-[300px] space-y-3 overflow-y-auto p-4">
             {msgs.map((m, i) => (
