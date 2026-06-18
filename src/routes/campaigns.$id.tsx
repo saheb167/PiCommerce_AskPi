@@ -108,6 +108,9 @@ function CampaignBuilder() {
           autoStartAskPi={isNew}
           isNew={isNew}
           onAiBuiltName={(n) => { setName(n); setDirty(true); }}
+          seedName={isNew ? seedName : undefined}
+          seedDescription={isNew ? seedDescription : undefined}
+          seedObjective={isNew ? seedObjective : undefined}
         />
       </div>
     </div>

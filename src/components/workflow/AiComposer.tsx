@@ -23,6 +23,10 @@ export type AiComposerProps = {
   onBuildingChange?: (building: boolean) => void;
   /** Fires when the conversation saves a versioned draft (e.g. "v1"). */
   onSavedDraft?: (version: string) => void;
+  /** Seed campaign name/description/objective used to rank suggested templates. */
+  seedName?: string;
+  seedDescription?: string;
+  seedObjective?: string;
 };
 
 export function AiComposer({
@@ -33,6 +37,9 @@ export function AiComposer({
   onWizardBuild,
   onBuildingChange,
   onSavedDraft,
+  seedName,
+  seedDescription,
+  seedObjective,
 }: AiComposerProps = {}) {
   const [state, setState] = useState<State>("collapsed");
   const [value, setValue] = useState("");
@@ -179,7 +186,7 @@ export function AiComposer({
           {/* Wizard mode body — conversational campaign builder */}
           {isWizard && (
             <div className="relative">
-              {(wizardPhase === "intent" || wizardPhase === "resolve" || wizardPhase === "confirm") && (
+              {(wizardPhase === "intent" || wizardPhase === "briefConfirm" || wizardPhase === "resolve" || wizardPhase === "confirm") && (
                 <button
                   onClick={collapse}
                   className="absolute right-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -194,6 +201,9 @@ export function AiComposer({
                 onBuild={(p) => onWizardBuild?.(p)}
                 onPhaseChange={setWizardPhase}
                 onSavedDraft={(v) => onSavedDraft?.(v)}
+                seedName={seedName}
+                seedDescription={seedDescription}
+                seedObjective={seedObjective}
               />
             </div>
           )}

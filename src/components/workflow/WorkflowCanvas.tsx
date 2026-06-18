@@ -75,6 +75,9 @@ export function WorkflowCanvas({
   autoStartAskPi = false,
   isNew = false,
   onAiBuiltName,
+  seedName,
+  seedDescription,
+  seedObjective,
 }: {
   status: CampaignStatus;
   campaignId?: string;
@@ -83,6 +86,9 @@ export function WorkflowCanvas({
   autoStartAskPi?: boolean;
   isNew?: boolean;
   onAiBuiltName?: (name: string) => void;
+  seedName?: string;
+  seedDescription?: string;
+  seedObjective?: string;
 }) {
   // Pre-built example campaigns ship their own authored graph; everything else
   // (the existing demo campaigns) falls back to the shared seed graph.
@@ -312,6 +318,9 @@ export function WorkflowCanvas({
         mode="wizard"
         nudge={{ label: "Ask Pi to build your campaign", active: autoStartAskPi }}
         autoOpenWizard={askPiOpen}
+        seedName={isNew ? seedName : undefined}
+        seedDescription={isNew ? seedDescription : undefined}
+        seedObjective={isNew ? seedObjective : undefined}
         onBuildingChange={setAiBuilding}
         onWizardSkeleton={(skel) => {
           setSelected(null);

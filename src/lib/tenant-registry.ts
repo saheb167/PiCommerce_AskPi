@@ -109,6 +109,139 @@ const durationLabel = (raw: string) => {
 };
 
 /* ---------------------------------------------------------------- */
+/* Channels — the building blocks for templates and briefs          */
+/* ---------------------------------------------------------------- */
+
+export type Channel = "whatsapp" | "sms" | "voice";
+
+/**
+ * The channels / priority / fallback details Pi confirms before drafting an
+ * A2 brief (and that back a multi-channel A1 template). `primary` sends first;
+ * `fallback` (if any) sends after `fallbackWait` when the primary isn't delivered.
+ */
+export type BriefConfig = {
+  channels: Channel[];
+  primary: Channel;
+  fallback: Channel | null;
+  fallbackWait: string;
+};
+
+export const CHANNEL_META: Record<
+  Channel,
+  { label: string; resourceKind: TemplateVar["kind"]; resourceKey: string; resourceLabel: string }
+> = {
+  whatsapp: { label: "WhatsApp", resourceKind: "waTemplate", resourceKey: "waTemplate", resourceLabel: "Approved WhatsApp template" },
+  sms: { label: "SMS", resourceKind: "smsSender", resourceKey: "smsSender", resourceLabel: "SMS sender header" },
+  voice: { label: "Voice", resourceKind: "voiceAgent", resourceKey: "voiceAgent", resourceLabel: "Voice agent" },
+};
+
+export const CHANNEL_SAMPLE: Record<Channel, string> = {
+  whatsapp: "Hi {{1}}, you left items in your cart — complete your order here: {{2}}",
+  sms: "Hi {{first_name}}, your cart is waiting. Finish checkout: {{link}}",
+  voice: "\"Hi, this is calling about the items still in your cart — can I help you complete the order now?\"",
+};
+
+const channelGap = (ch: Channel): TemplateVar => {
+  const m = CHANNEL_META[ch];
+  return { key: m.resourceKey, kind: m.resourceKind, label: m.resourceLabel, required: true } as TemplateVar;
+};
+
+/** One journey node for a channel, configured from resolved values + tenant defaults. */
+function channelNode(ch: Channel, y: number, resolved: Record<string, string>): Node<WorkflowNodeData> {
+  if (ch === "whatsapp") {
+    const wa = findWaTemplate(resolved.waTemplate);
+    return { id: "wa", type: "workflow", position: { x: 0, y },
+      data: { kind: "whatsapp", title: "WhatsApp message",
+        subtitle: wa ? `Template: ${wa.label}` : "Pick template",
+        valid: !!wa, error: wa ? undefined : "Pick template",
+        config: { waNumber: TENANT_DEFAULTS.waNumber, waMode: "template",
+          waTemplate: wa ? `${wa.label} · ${wa.category}` : undefined,
+          waVarMap: [{ v: "{{1}}", def: "contact.first_name" }, { v: "{{2}}", def: "payload.order_id" }] } } };
+  }
+  if (ch === "sms") {
+    const sender = findSmsSender(resolved.smsSender);
+    return { id: "sms", type: "workflow", position: { x: 0, y },
+      data: { kind: "sms", title: "SMS",
+        subtitle: sender ? `Sender: ${sender.senderId}` : "Add sender",
+        valid: !!sender, error: sender ? undefined : "Select sender",
+        config: { smsType: "Promotional", smsFormat: "Text",
+          senderId: sender?.senderId, peId: sender?.peId,
+          smsBody: "Hi {{first_name}}, complete your order: {{link}}" } } };
+  }
+  const agent = findVoiceAgent(resolved.voiceAgent);
+  return { id: "voice", type: "workflow", position: { x: 0, y },
+    data: { kind: "voiceCall", title: "Voice call",
+      subtitle: agent ? `Agent: ${agent.name}` : "Select voice agent",
+      valid: !!agent, error: agent ? undefined : "Select agent",
+      config: { agent: agent?.name, callStart: TENANT_DEFAULTS.windowStart,
+        callEnd: TENANT_DEFAULTS.windowEnd, timezone: TENANT_DEFAULTS.timezone,
+        maxAttempts: 3, retryInterval: "1 hour",
+        voiceVarMap: [{ v: "{{name}}", def: "contact.first_name" }] } } };
+}
+
+/**
+ * Linear journey from a channel config: start → audience → primary →
+ * (fallback ? wait → fallback) → end. Used by both A2 briefs and the
+ * multi-channel A1 templates so node IDs/shape stay consistent for
+ * applyResolved + applyRefinement (delay node patched in place).
+ */
+function buildFromChannels(name: string, cfg: BriefConfig, resolved: Record<string, string>): AskPiPlan {
+  const seg = findSegment(resolved.segment);
+  const nodes: Node<WorkflowNodeData>[] = [
+    { id: "start", type: "workflow", position: { x: 0, y: 0 },
+      data: { kind: "start", title: "Start", locked: true, valid: true } },
+    { id: "audience", type: "workflow", position: { x: 0, y: 120 },
+      data: { kind: "audience", title: "Audience",
+        subtitle: seg ? `${seg.label} · ${seg.size}` : "Select segment",
+        valid: !!seg, error: seg ? undefined : "Select segment",
+        config: { audienceMode: "api", phoneField: "contact.phone" } } },
+  ];
+  let y = 240;
+  nodes.push(channelNode(cfg.primary, y, resolved));
+  y += 120;
+  if (cfg.fallback) {
+    const { value, unit } = parseDuration(resolved.fallbackWindow ?? cfg.fallbackWait);
+    nodes.push({ id: "delay", type: "workflow", position: { x: 0, y },
+      data: { kind: "delay", title: "Fallback wait", subtitle: `${value} ${unit}`, valid: true,
+        config: { delayValue: value, delayUnit: unit } } });
+    y += 120;
+    nodes.push(channelNode(cfg.fallback, y, resolved));
+    y += 120;
+  }
+  nodes.push({ id: "end", type: "workflow", position: { x: 0, y },
+    data: { kind: "end", title: "End", locked: true, valid: true } });
+
+  const ids = nodes.map((n) => n.id);
+  const edges: Edge[] = ids.slice(1).map((id, i) => ({ id: `e_${ids[i]}_${id}`, source: ids[i], target: id }));
+  return { nodes, edges, name };
+}
+
+/** Open variables implied by a channel config: segment + each channel's resource + fallback window. */
+function channelOpenVars(cfg: BriefConfig): TemplateVar[] {
+  const vars: TemplateVar[] = [
+    { key: "segment", kind: "segment", label: "Audience segment", required: true },
+  ];
+  const seen = new Set<string>();
+  for (const ch of cfg.channels) {
+    const gap = channelGap(ch);
+    if (seen.has(gap.key)) continue;
+    seen.add(gap.key);
+    vars.push(gap);
+  }
+  if (cfg.fallback) {
+    vars.push({ key: "fallbackWindow", kind: "duration", label: "Fallback window", default: cfg.fallbackWait, required: false });
+  }
+  return vars;
+}
+
+/** Human-readable "Primary X → fallback Y (on non-delivery)" line. */
+export function channelsSummary(cfg: BriefConfig): string {
+  const p = CHANNEL_META[cfg.primary].label;
+  if (cfg.fallback) return `Primary ${p} → fallback ${CHANNEL_META[cfg.fallback].label} (on non-delivery)`;
+  return `Primary ${p} only`;
+}
+
+/* ---------------------------------------------------------------- */
 /* A1 — Campaign templates (declarative open vars + builder)        */
 /* ---------------------------------------------------------------- */
 
@@ -117,10 +250,18 @@ export type CampaignTemplate = {
   name: string;
   tenant: string;
   objective: string;
+  /** One-line pitch shown on the suggestion card. */
+  summary: string;
+  /** Channels this template uses (priority order) — drives confirm previews. */
+  channels: Channel[];
+  /** Keywords used to rank this template against the campaign goal/description. */
+  keywords: string[];
   /** Tenant defaults pre-filled (shown as assumptions, never asked). */
   assumptions: string[];
   openVars: TemplateVar[];
   build: (resolved: Record<string, string>) => AskPiPlan;
+  /** Optional channel-specific sample copy for the Confirm card. */
+  samples?: Partial<Record<Channel, string>>;
 };
 
 function emiTemplateBuild(resolved: Record<string, string>): AskPiPlan {
@@ -181,17 +322,25 @@ function emiTemplateBuild(resolved: Record<string, string>): AskPiPlan {
   return { nodes, edges, name: "Pre-due EMI Reminder" };
 }
 
+const tenantAssumptions = (): string[] => [
+  `Sending window ${TENANT_DEFAULTS.windowStart}–${TENANT_DEFAULTS.windowEnd} ${TENANT_DEFAULTS.timezone}`,
+  `Frequency cap ${TENANT_DEFAULTS.freqCap}`,
+  `Sender header ${TENANT_DEFAULTS.waNumber}`,
+];
+
+const CART_CFG: BriefConfig = { channels: ["whatsapp", "sms"], primary: "whatsapp", fallback: "sms", fallbackWait: "6 hours" };
+const DORMANT_CFG: BriefConfig = { channels: ["whatsapp", "voice"], primary: "whatsapp", fallback: "voice", fallbackWait: "1 day" };
+
 export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
   {
     id: "pre_due_emi_reminder_v3",
     name: "Pre-due EMI Reminder",
     tenant: "Suryoday SFB",
     objective: "Remind borrowers ahead of an upcoming EMI to reduce missed payments.",
-    assumptions: [
-      `Sending window ${TENANT_DEFAULTS.windowStart}–${TENANT_DEFAULTS.windowEnd} ${TENANT_DEFAULTS.timezone}`,
-      `Frequency cap ${TENANT_DEFAULTS.freqCap}`,
-      `Sender header ${TENANT_DEFAULTS.waNumber}`,
-    ],
+    summary: "WhatsApp reminder before the due date, with a voice fallback for non-responders.",
+    channels: ["whatsapp", "voice"],
+    keywords: ["emi", "payment", "due", "loan", "reminder", "repayment", "collection", "installment", "instalment"],
+    assumptions: tenantAssumptions(),
     openVars: [
       { key: "segment", kind: "segment", label: "Audience segment", required: true },
       { key: "waTemplate", kind: "waTemplate", label: "Approved WhatsApp template", required: true },
@@ -199,8 +348,56 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
       { key: "fallbackWindow", kind: "duration", label: "Fallback window", default: "1 day", required: true },
     ],
     build: emiTemplateBuild,
+    samples: {
+      whatsapp: "Hi {{1}}, your EMI of {{2}} is due soon. Tap to pay now and avoid late fees.",
+      voice: "\"Hi, this is a quick reminder that your upcoming EMI is due in a few days — would you like to pay now?\"",
+    },
+  },
+  {
+    id: "abandoned_cart_recovery_v2",
+    name: "Abandoned Cart Recovery",
+    tenant: "StyleZen",
+    objective: "Win back shoppers who left items in their cart with a WhatsApp nudge and SMS fallback.",
+    summary: "WhatsApp recovery message, falling back to SMS if WhatsApp isn't delivered.",
+    channels: ["whatsapp", "sms"],
+    keywords: ["cart", "abandon", "checkout", "recover", "shop", "ecommerce", "purchase", "basket", "order"],
+    assumptions: tenantAssumptions(),
+    openVars: channelOpenVars(CART_CFG),
+    build: (resolved) => buildFromChannels("Abandoned Cart Recovery", CART_CFG, resolved),
+    samples: { whatsapp: CHANNEL_SAMPLE.whatsapp, sms: CHANNEL_SAMPLE.sms },
+  },
+  {
+    id: "dormant_reactivation_v1",
+    name: "Dormant Reactivation",
+    tenant: "Pi Commerce",
+    objective: "Re-engage customers inactive for 90+ days with WhatsApp and a voice win-back.",
+    summary: "WhatsApp re-engagement, with a voice win-back call for high-value dormant users.",
+    channels: ["whatsapp", "voice"],
+    keywords: ["dormant", "inactive", "reactivat", "reactivation", "win back", "winback", "lapsed", "churn", "re-engage", "reengage"],
+    assumptions: tenantAssumptions(),
+    openVars: channelOpenVars(DORMANT_CFG),
+    build: (resolved) => buildFromChannels("Dormant Reactivation", DORMANT_CFG, resolved),
+    samples: {
+      whatsapp: "Hi {{1}}, we've missed you! Here's {{2}} to welcome you back.",
+      voice: CHANNEL_SAMPLE.voice,
+    },
   },
 ];
+
+/** Rank templates against a campaign description/goal (keyword overlap). */
+export function suggestTemplates(text: string): CampaignTemplate[] {
+  const t = (text || "").toLowerCase();
+  if (!t.trim()) return CAMPAIGN_TEMPLATES.slice();
+  const scored = CAMPAIGN_TEMPLATES.map((c) => {
+    let score = 0;
+    for (const k of c.keywords) if (t.includes(k)) score += 2;
+    if (t.includes(c.name.toLowerCase())) score += 3;
+    if (t.includes(c.tenant.toLowerCase())) score += 1;
+    return { c, score };
+  });
+  const hits = scored.filter((s) => s.score > 0).sort((a, b) => b.score - a.score);
+  return hits.length ? hits.map((s) => s.c) : CAMPAIGN_TEMPLATES.slice();
+}
 
 export function matchTemplate(text: string): CampaignTemplate | undefined {
   const t = text.toLowerCase();
@@ -217,59 +414,71 @@ export type BriefPlan = {
   plan: AskPiPlan;
   objective: string;
   channelsLine: string;
+  channels: Channel[];
   assumptions: string[];
   gaps: TemplateVar[];
 };
 
-/** Cart-recovery WhatsApp → (wait) → SMS fallback. Default brief shape. */
-export function planFromBrief(_text: string): BriefPlan {
-  const defaultWait = "6 hours";
-  const { value, unit } = parseDuration(defaultWait);
+/** Derive a short campaign name from the brief text. */
+export function briefName(text: string): string {
+  const t = (text || "").toLowerCase();
+  if (t.includes("cart") || t.includes("checkout") || t.includes("basket")) return "Abandoned Cart Recovery";
+  if (t.includes("dormant") || t.includes("inactive") || t.includes("reactivat") || t.includes("win back") || t.includes("winback") || t.includes("lapsed")) return "Dormant Reactivation";
+  if (t.includes("emi") || t.includes("payment") || t.includes("due") || t.includes("repayment")) return "Payment Reminder";
+  if (t.includes("welcome") || t.includes("onboard")) return "Welcome Journey";
+  return "New Campaign";
+}
 
-  const nodes: Node<WorkflowNodeData>[] = [
-    { id: "start", type: "workflow", position: { x: 0, y: 0 },
-      data: { kind: "start", title: "Start", locked: true, valid: true } },
-    { id: "audience", type: "workflow", position: { x: 0, y: 120 },
-      data: { kind: "audience", title: "Audience", subtitle: "Select segment",
-        valid: false, error: "Select segment",
-        config: { audienceMode: "api", phoneField: "contact.phone" } } },
-    { id: "wa", type: "workflow", position: { x: 0, y: 240 },
-      data: { kind: "whatsapp", title: "WhatsApp recovery", subtitle: "Pick template",
-        valid: false, error: "Pick template",
-        config: { waNumber: TENANT_DEFAULTS.waNumber, waMode: "template",
-          waVarMap: [{ v: "{{1}}", def: "contact.first_name" }, { v: "{{2}}", def: "payload.order_id" }] } } },
-    { id: "delay", type: "workflow", position: { x: 0, y: 360 },
-      data: { kind: "delay", title: "Fallback wait", subtitle: `${value} ${unit}`, valid: true,
-        config: { delayValue: value, delayUnit: unit } } },
-    { id: "sms", type: "workflow", position: { x: 0, y: 480 },
-      data: { kind: "sms", title: "SMS fallback", subtitle: "Add sender", valid: false, error: "Select sender",
-        config: { smsType: "Promotional", smsFormat: "Text",
-          smsBody: "Hi {{first_name}}, your cart is waiting — complete your order: {{link}}" } } },
-    { id: "end", type: "workflow", position: { x: 0, y: 600 },
-      data: { kind: "end", title: "End", locked: true, valid: true } },
-  ];
-  const edges: Edge[] = [
-    { id: "e_s_a", source: "start", target: "audience" },
-    { id: "e_a_wa", source: "audience", target: "wa" },
-    { id: "e_wa_d", source: "wa", target: "delay" },
-    { id: "e_d_sms", source: "delay", target: "sms" },
-    { id: "e_sms_e", source: "sms", target: "end" },
-  ];
+/**
+ * Inspect a free-form brief and infer the channels / priority / fallback that
+ * Pi will confirm with the user before drafting. Order of detection sets the
+ * default priority; an explicit "fallback" mention overrides which is the fallback.
+ */
+export function analyzeBrief(text: string): BriefConfig {
+  const t = (text || "").toLowerCase();
+  const detected: Channel[] = [];
+  if (/whats\s?app|\bwa\b/.test(t)) detected.push("whatsapp");
+  if (/\bsms\b|text message|text msg/.test(t)) detected.push("sms");
+  if (/voice|\bcall\b|calling|ivr|phone\b/.test(t)) detected.push("voice");
+  if (detected.length === 0) detected.push("whatsapp");
 
+  let primary = detected[0];
+  let fallback: Channel | null = detected[1] ?? null;
+
+  // Pin the fallback channel from explicit phrasing: prefer "<channel> fallback"
+  // (channel right before the word), then "fallback to/on/via <channel>".
+  const toChannel = (s: string): Channel => (/whats/.test(s) ? "whatsapp" : /sms/.test(s) ? "sms" : "voice");
+  const fbMatch =
+    t.match(/(whats\s?app|sms|voice|call)\s+fall\s?back/) ??
+    t.match(/fall\s?back\s+(?:to|on|via|with|using)?\s*(whats\s?app|sms|voice|call)/);
+  if (fbMatch && detected.length >= 2) {
+    const fb = toChannel(fbMatch[1]);
+    fallback = fb;
+    primary = detected.find((c) => c !== fb) ?? primary;
+  }
+
+  const ordered = fallback ? [primary, fallback] : [primary];
+  const fallbackWait = primary === "whatsapp" && fallback === "sms" ? "6 hours" : "1 day";
+  return { channels: ordered, primary, fallback, fallbackWait };
+}
+
+/** Build a brief plan from confirmed channel config. Gaps surface in the Resolve card. */
+export function planFromBrief(text: string, cfg: BriefConfig): BriefPlan {
+  const name = briefName(text);
+  const plan = buildFromChannels(name, cfg, {});
+  const line = channelsSummary(cfg);
+  const assumptions = [
+    ...(cfg.fallback ? [`Fallback wait defaulted to ${durationLabel(cfg.fallbackWait)}`] : []),
+    `Sending window ${TENANT_DEFAULTS.windowStart}–${TENANT_DEFAULTS.windowEnd} ${TENANT_DEFAULTS.timezone}`,
+    `Frequency cap ${TENANT_DEFAULTS.freqCap}`,
+  ];
   return {
-    plan: { nodes, edges, name: "Abandoned Cart Recovery" },
-    objective: "Recover abandoned carts via WhatsApp, falling back to SMS when WhatsApp isn't delivered.",
-    channelsLine: "Primary WhatsApp → fallback SMS (on non-delivery)",
-    assumptions: [
-      `Fallback wait defaulted to ${defaultWait}`,
-      "Sending window 9:00–21:00 Asia/Kolkata (IST)",
-    ],
-    gaps: [
-      { key: "segment", kind: "segment", label: "Audience segment", required: true },
-      { key: "waTemplate", kind: "waTemplate", label: "Approved WhatsApp template", required: true },
-      { key: "smsSender", kind: "smsSender", label: "SMS sender header", required: true },
-      { key: "fallbackWindow", kind: "duration", label: "Confirm fallback window", default: defaultWait, required: false },
-    ],
+    plan,
+    objective: `${name} — ${line.toLowerCase()}.`,
+    channelsLine: line,
+    channels: cfg.channels,
+    assumptions,
+    gaps: channelOpenVars(cfg),
   };
 }
 
