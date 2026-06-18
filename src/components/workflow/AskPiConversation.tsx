@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Sparkles, Check, Loader2, ChevronLeft, ArrowRight, ArrowUp,
   AlertTriangle, XCircle, ShieldCheck, Wand2, FileText, MessageSquare, Phone,
+  Target, Users, Workflow, ListChecks,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -43,23 +44,6 @@ export type AskPiConversationProps = {
 
 const CHANNEL_ORDER: Channel[] = ["whatsapp", "sms", "voice"];
 
-// Logical, mode-aware "thinking" steps shown while Pi drafts the journey.
-// A1 instantiates an approved template; A2 reasons from a free-text brief.
-const A1_PLAN_STEPS = [
-  "Loading the approved template…",
-  "Pre-filling tenant defaults — window, frequency cap, sender header…",
-  "Instantiating the journey nodes…",
-  "Wiring channel steps & the fallback branch…",
-  "Rendering the draft on the canvas…",
-];
-const A2_PLAN_STEPS = [
-  "Reading your brief…",
-  "Resolving tenant registries — segments, templates, senders…",
-  "Selecting channels & the send sequence…",
-  "Wiring the fallback branch with real IDs…",
-  "Rendering the draft on the canvas…",
-];
-
 let _mid = 0;
 const nextId = () => `m${++_mid}`;
 
@@ -89,17 +73,16 @@ export function AskPiConversation({
   const [assumptions, setAssumptions] = useState<string[]>([]);
   const [warnMessages, setWarnMessages] = useState<string[]>([]);
   const [validationChecks, setValidationChecks] = useState<ValidationCheck[]>([]);
-  const [buildStepIdx, setBuildStepIdx] = useState(0);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [briefText, setBriefText] = useState("");
   const [briefConfig, setBriefConfig] = useState<BriefConfig | null>(null);
+  const [objective, setObjective] = useState("");
 
   const seedText = useMemo(
     () => [seedName, seedObjective, seedDescription].filter(Boolean).join(" · "),
     [seedName, seedObjective, seedDescription],
   );
   const suggestedTemplates = useMemo(() => suggestTemplates(seedText), [seedText]);
-  const planSteps = mode === "a1" ? A1_PLAN_STEPS : A2_PLAN_STEPS;
 
   // Refs to read fresh values inside timeouts.
   const pendingPlanRef = useRef<AskPiPlan | null>(null);
@@ -129,10 +112,10 @@ export function AskPiConversation({
     setAssumptions([]);
     setWarnMessages([]);
     setValidationChecks([]);
-    setBuildStepIdx(0);
     setChannels([]);
     setBriefText("");
     setBriefConfig(null);
+    setObjective("");
     pendingPlanRef.current = null;
   }, [active]);
 
@@ -156,15 +139,13 @@ export function AskPiConversation({
     setMode("a1");
     setTemplate(tpl);
     setBrief(null);
+    setObjective(tpl.objective);
     setOpenVars(tpl.openVars);
     setAssumptions(tpl.assumptions);
     setChannels(tpl.channels);
     setWarnMessages([]);
     setResolved({});
     pendingPlanRef.current = tpl.build({});
-    pushPi(`Found "${tpl.name}" (${tpl.tenant}). ${tpl.objective}`);
-    pushPi(`Tenant defaults pre-filled — not asked: ${tpl.assumptions.join(" · ")}.`);
-    pushPi("Instantiating the approved journey on the canvas…");
     setPhase("planning");
   }
 
@@ -176,8 +157,6 @@ export function AskPiConversation({
     setBrief(null);
     setBriefText(text);
     setBriefConfig(cfg);
-    pushUser(text);
-    pushPi("Before I draft this, let me confirm how it should run — the channels, which sends first, and any fallback.");
     setPhase("briefConfirm");
   }
 
@@ -186,16 +165,13 @@ export function AskPiConversation({
     setMode("a2");
     setBrief(bp);
     setTemplate(null);
+    setObjective(bp.objective);
     setOpenVars(bp.gaps);
     setAssumptions(bp.assumptions);
     setChannels(bp.channels);
     setWarnMessages([]);
     setResolved({});
     pendingPlanRef.current = bp.plan;
-    pushPi(`Got it — ${bp.objective}`);
-    pushPi(`Channels: ${bp.channelsLine}.`);
-    pushPi(`Assumptions: ${bp.assumptions.join(" · ")}.`);
-    pushPi("Drafting the journey on the canvas with real IDs…");
     setPhase("planning");
   }
 
@@ -261,11 +237,6 @@ export function AskPiConversation({
     const p = pendingPlanRef.current;
     if (!p) return;
     onSkeleton(buildSkeleton(p));
-    setBuildStepIdx(0);
-    const tick = setInterval(
-      () => setBuildStepIdx((i) => Math.min(i + 1, planSteps.length - 1)),
-      650,
-    );
     const done = setTimeout(() => {
       onBuild(p);
       // Pre-fill duration defaults so the Resolve card opens ready.
@@ -276,10 +247,9 @@ export function AskPiConversation({
         }
         return next;
       });
-      pushPi("Draft is on the canvas. I batched everything I still need into one step below.");
       setPhase("resolve");
-    }, 3000);
-    return () => { clearInterval(tick); clearTimeout(done); };
+    }, 1400);
+    return () => clearTimeout(done);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase]);
 
@@ -291,8 +261,6 @@ export function AskPiConversation({
       const res = validateResolved(openVarsRef.current, resolvedRef.current, channelsRef.current);
       setValidationChecks(res.checks);
       if (res.level === "block") {
-        const blocks = res.checks.filter((c) => c.status === "block");
-        pushPi(`Validation failed — ${blocks.length} check${blocks.length === 1 ? "" : "s"} blocked the draft. Review the card below.`);
         setPhase("blocked");
         return;
       }
@@ -301,13 +269,7 @@ export function AskPiConversation({
       pendingPlanRef.current = patched;
       onBuild(patched);
       const warns = res.checks.filter((c) => c.status === "warn").map((c) => c.detail);
-      if (res.level === "warn") {
-        setWarnMessages(warns);
-        pushPi(`All ${res.checks.length} checks ran — ${warns.length} need explicit acceptance on the next step.`);
-      } else {
-        setWarnMessages([]);
-        pushPi(`All ${res.checks.length} validation checks passed. Here's the final review.`);
-      }
+      setWarnMessages(res.level === "warn" ? warns : []);
       setPhase("confirm");
     }, 1000);
     return () => clearTimeout(t);
@@ -374,6 +336,22 @@ export function AskPiConversation({
     [channels, template],
   );
 
+  // Plain-language campaign review derived from the resolved draft.
+  const review = useMemo(() => {
+    const goal = objective || template?.objective || "—";
+    const segVar = openVars.find((v) => v.kind === "segment");
+    const seg = segVar ? SEGMENTS.find((s) => s.id === resolved[segVar.key]) : undefined;
+    const audience = seg ? `${seg.label} · ${seg.size}` : "All eligible contacts";
+    const durVar = openVars.find((v) => v.kind === "duration");
+    const wait = durVar ? resolved[durVar.key] : undefined;
+    return { goal, audience, wait };
+  }, [objective, template, openVars, resolved]);
+
+  const warnChecks = useMemo(
+    () => validationChecks.filter((c) => c.status === "warn"),
+    [validationChecks],
+  );
+
   /* ----------------------------------------------------------------- */
   /* Render                                                            */
   /* ----------------------------------------------------------------- */
@@ -390,11 +368,11 @@ export function AskPiConversation({
   const headerSubtitle =
     phase === "intent" ? "Pick a suggested template or describe a campaign"
       : phase === "briefConfirm" ? "Channels, priority & fallback before I draft"
-        : phase === "planning" ? planSteps[buildStepIdx]
-          : phase === "resolve" ? "Only the open variables — pickers list approved IDs only"
+        : phase === "planning" ? "Drafting the journey on the canvas…"
+          : phase === "resolve" ? "Complete the pre-flight checks, then validate"
             : phase === "validating" ? "Checking audience, channels, approvals & compliance"
               : phase === "blocked" ? "Fix the blocked checks, then re-validate"
-                : phase === "confirm" ? "Review the sample messages and assumptions"
+                : phase === "confirm" ? "Review the campaign, then confirm"
                   : "Review on canvas · launch separately";
 
   const PROGRESS: Record<ConversationPhase, number> = {
@@ -433,32 +411,7 @@ export function AskPiConversation({
 
       {/* Scrollable conversation body — fixed max height, internal scroll */}
       <div ref={logRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
-        {/* Chat trace */}
-        {messages.length > 0 && (
-          <div className="space-y-2 px-5 pt-3">
-          {messages.map((m) => (
-            <div key={m.id} className={cn("flex gap-2", m.from === "user" && "justify-end")}>
-              {m.from === "pi" && (
-                <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-ai/10">
-                  <Sparkles className="h-3 w-3 text-ai" />
-                </div>
-              )}
-              <p
-                className={cn(
-                  "max-w-[82%] rounded-2xl px-3 py-1.5 text-[12px] leading-relaxed",
-                  m.from === "pi"
-                    ? "bg-secondary text-foreground"
-                    : "bg-ai text-ai-foreground",
-                )}
-              >
-                {m.text}
-              </p>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Intent */}
+        {/* Intent */}
       {phase === "intent" && (
         <div className="px-5 pb-4 pt-3">
           <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -620,24 +573,8 @@ export function AskPiConversation({
 
       {/* Planning trace */}
       {phase === "planning" && (
-        <div className="px-5 pb-4 pt-3">
-          <ul className="space-y-1">
-            {planSteps.map((s, i) => (
-              <li
-                key={s}
-                className={cn(
-                  "flex items-center gap-2 text-[12px] transition-colors",
-                  i < buildStepIdx ? "text-muted-foreground"
-                    : i === buildStepIdx ? "text-foreground" : "text-muted-foreground/50",
-                )}
-              >
-                {i < buildStepIdx ? <Check className="h-3 w-3 text-success" />
-                  : i === buildStepIdx ? <Loader2 className="h-3 w-3 animate-spin text-ai" />
-                    : <span className="h-1 w-1 rounded-full bg-muted-foreground/40" />}
-                {s}
-              </li>
-            ))}
-          </ul>
+        <div className="flex items-center gap-2 px-5 pb-5 pt-3 text-[12.5px] text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-ai" /> Drafting the journey on the canvas…
         </div>
       )}
 
@@ -668,9 +605,17 @@ export function AskPiConversation({
 
             <button
               onClick={() => setPhase("validating")}
-              className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-ai px-3 py-2 text-[12px] font-medium text-ai-foreground transition-all hover:opacity-90"
+              disabled={liveBlocks > 0}
+              className={cn(
+                "mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[12px] font-medium transition-all",
+                liveBlocks > 0
+                  ? "cursor-not-allowed bg-muted text-muted-foreground/60"
+                  : "bg-ai text-ai-foreground hover:opacity-90",
+              )}
             >
-              {liveBlocks > 0 ? "Run validation" : "Validate & continue"}
+              {liveBlocks > 0
+                ? `Complete ${liveBlocks} pre-flight check${liveBlocks === 1 ? "" : "s"} to validate`
+                : "Run validation"}
               <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -742,35 +687,90 @@ export function AskPiConversation({
         </div>
       )}
 
-      {/* Confirm card */}
+      {/* Confirm card — campaign review + warnings */}
       {phase === "confirm" && (
         <div className="px-5 pb-4 pt-3">
           <div className="space-y-2.5">
+            {/* Campaign review */}
+            <div className="rounded-xl border border-border bg-card">
+              <p className="border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Campaign review
+              </p>
+              <div className="divide-y divide-border/60">
+                <div className="flex items-start gap-2.5 px-3 py-2.5">
+                  <Target className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ai" />
+                  <div>
+                    <p className="text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">Goal</p>
+                    <p className="text-[12.5px] text-foreground">{review.goal}</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-2.5 px-3 py-2.5">
+                  <Users className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ai" />
+                  <div>
+                    <p className="text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">Audience</p>
+                    <p className="text-[12.5px] text-foreground">{review.audience}</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-2.5 px-3 py-2.5">
+                  <Workflow className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ai" />
+                  <div className="min-w-0">
+                    <p className="text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">Journey</p>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[12.5px] text-foreground">
+                      {channels.map((ch, i) => (
+                        <Fragment key={ch}>
+                          {i > 0 && <ArrowRight className="h-3 w-3 text-muted-foreground" />}
+                          <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-1.5 py-0.5">
+                            <ChannelIcon ch={ch} className="h-2.5 w-2.5" /> {CHANNEL_META[ch].label}
+                          </span>
+                        </Fragment>
+                      ))}
+                    </div>
+                    {review.wait && (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Fallback waits {review.wait} after non-delivery.
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-start gap-2.5 px-3 py-2.5">
+                  <ListChecks className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ai" />
+                  <div>
+                    <p className="text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">Assumptions</p>
+                    <ul className="mt-1 space-y-1">
+                      {assumptions.map((a) => (
+                        <li key={a} className="flex items-start gap-1.5 text-[12px] text-foreground">
+                          <Check className="mt-0.5 h-3 w-3 shrink-0 text-success" /> {a}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Sample messages */}
             {samplePreviews.map((s) => (
               <SamplePreview key={s.ch} icon={<ChannelIcon ch={s.ch} />} label={s.label} body={s.body} />
             ))}
 
-            {validationChecks.length > 0 && (
-              <ValidationChecklist checks={validationChecks} title="Validation checks" />
-            )}
-
-            <div className="rounded-xl border border-border bg-card px-3 py-2.5">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Assumptions</p>
-              <ul className="mt-1.5 space-y-1">
-                {assumptions.map((a) => (
-                  <li key={a} className="flex items-start gap-1.5 text-[12px] text-foreground">
-                    <Check className="mt-0.5 h-3 w-3 shrink-0 text-success" /> {a}
-                  </li>
-                ))}
-              </ul>
-            </div>
-
-            {warnMessages.length > 0 && (
-              <div className="flex items-start gap-1.5 rounded-xl border border-warning/40 bg-warning/5 px-3 py-2.5 text-[12px] text-foreground">
-                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-                <span>
-                  {warnMessages.length} warning{warnMessages.length === 1 ? "" : "s"} above — &ldquo;Accept &amp; confirm&rdquo; saves the draft anyway; it won&rsquo;t launch until resolved.
-                </span>
+            {/* Warnings the user needs to set up */}
+            {warnChecks.length > 0 && (
+              <div className="rounded-xl border border-warning/40 bg-warning/5">
+                <p className="flex items-center gap-1.5 border-b border-warning/30 px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-warning">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  Needs your setup
+                </p>
+                <ul className="divide-y divide-warning/20">
+                  {warnChecks.map((c) => (
+                    <li key={c.id} className="px-3 py-2">
+                      <p className="text-[12px] font-medium text-foreground">{c.label}</p>
+                      <p className="text-[11.5px] text-muted-foreground">{c.detail}</p>
+                    </li>
+                  ))}
+                </ul>
+                <p className="px-3 py-2 text-[11px] text-muted-foreground">
+                  &ldquo;Accept &amp; confirm&rdquo; saves the draft anyway; it won&rsquo;t launch until resolved.
+                </p>
               </div>
             )}
           </div>
@@ -786,7 +786,7 @@ export function AskPiConversation({
               onClick={confirmDraft}
               className="inline-flex items-center gap-1.5 rounded-md bg-ai px-3 py-1.5 text-[11.5px] font-medium text-ai-foreground hover:opacity-90"
             >
-              <Check className="h-3 w-3" /> {warnMessages.length > 0 ? "Accept & confirm" : "Confirm"}
+              <Check className="h-3 w-3" /> {warnChecks.length > 0 ? "Accept & confirm" : "Confirm"}
             </button>
           </div>
         </div>
