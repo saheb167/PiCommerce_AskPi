@@ -292,32 +292,6 @@ export function AskPiConversation({
     [liveChecks],
   );
 
-  function handleRefine() {
-    const text = refineText.trim();
-    if (!text) return;
-    setRefineText("");
-    pushUser(text);
-    const base = pendingPlanRef.current;
-    if (!base) return;
-    const r = applyRefinement(text, base);
-    if (!r) {
-      pushPi("I can adjust the fallback wait — try \"make the fallback wait 3 hours\".");
-      return;
-    }
-    pendingPlanRef.current = r.plan;
-    onBuild(r.plan);
-    // Keep the Resolve card's duration field in sync so a later validate
-    // (applyResolved) doesn't overwrite this in-place patch.
-    const durationVar = openVarsRef.current.find((v) => v.kind === "duration");
-    if (durationVar) setResolved((prev) => ({ ...prev, [durationVar.key]: r.duration }));
-    // Keep the assumptions list consistent with the patched wait so the
-    // Confirm card doesn't contradict the canvas.
-    setAssumptions((prev) =>
-      prev.map((a) => (/fallback wait/i.test(a) ? `Fallback wait set to ${r.duration}` : a)),
-    );
-    pushPi(`${r.echo} Same node — re-validated, no rebuild.`);
-  }
-
   // Free-text edit from the campaign-review screen. Applies a refinement when
   // it matches (e.g. fallback wait), then drops the user back into the resolve
   // loop so they can keep adjusting open variables until it's done.
@@ -630,30 +604,6 @@ export function AskPiConversation({
               <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </div>
-
-          {/* A2 refine input */}
-          {mode === "a2" && (
-            <div className="mt-3 flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-1.5">
-              <Wand2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <input
-                value={refineText}
-                onChange={(e) => setRefineText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleRefine(); } }}
-                placeholder="Refine — e.g. make the fallback wait 3 hours, not 6"
-                className="min-w-0 flex-1 bg-transparent py-1 text-[12px] text-foreground placeholder:text-muted-foreground/70 focus:outline-none"
-              />
-              <button
-                onClick={handleRefine}
-                disabled={!refineText.trim()}
-                className={cn(
-                  "shrink-0 rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
-                  refineText.trim() ? "text-ai hover:bg-ai/10" : "text-muted-foreground/50",
-                )}
-              >
-                Refine
-              </button>
-            </div>
-          )}
         </div>
       )}
 
