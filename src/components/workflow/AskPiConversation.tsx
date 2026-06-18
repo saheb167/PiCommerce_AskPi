@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   Sparkles, Check, Loader2, ChevronLeft, ArrowRight, ArrowUp,
   AlertTriangle, XCircle, ShieldCheck, Wand2, FileText, MessageSquare, Phone,
-  Target, Users, Workflow, ListChecks,
+  Target, Users, Workflow, ListChecks, GitBranch, Send,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -11,10 +11,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { buildSkeleton, type AskPiPlan } from "./AskPiWizard";
 import {
-  SEGMENTS, WA_TEMPLATES, SMS_SENDERS, VOICE_AGENTS,
+  SEGMENTS, WA_TEMPLATES, SMS_SENDERS, VOICE_AGENTS, SPLIT_ATTRIBUTES,
   CHANNEL_META,
   matchTemplate, planFromBrief, analyzeBrief, suggestTemplates, channelsSummary,
-  applyResolved, applyRefinement, validateResolved, runChecks,
+  applyResolved, applyRefinement, applySplit, validateResolved, runChecks,
+  splitVars, findSplitAttribute,
   type CampaignTemplate, type BriefPlan, type TemplateVar,
   type BriefConfig, type Channel, type ValidationCheck,
 } from "@/lib/tenant-registry";
@@ -24,7 +25,8 @@ import {
 /* ----------------------------------------------------------------- */
 
 export type ConversationPhase =
-  | "intent" | "briefConfirm" | "planning" | "resolve" | "validating" | "blocked" | "confirm" | "saved";
+  | "intent" | "briefConfirm" | "planning" | "resolve" | "journey" | "splitResolve"
+  | "validating" | "blocked" | "confirm" | "saved";
 
 type Mode = "a1" | "a2";
 type Msg = { id: string; from: "pi" | "user"; text: string };
@@ -77,6 +79,9 @@ export function AskPiConversation({
   const [briefText, setBriefText] = useState("");
   const [briefConfig, setBriefConfig] = useState<BriefConfig | null>(null);
   const [objective, setObjective] = useState("");
+  // null until the journey step; "split" routes through the split Resolve card,
+  // "broadcast" sends both channels to the full segment.
+  const [splitChoice, setSplitChoice] = useState<"split" | "broadcast" | null>(null);
 
   const seedText = useMemo(
     () => [seedName, seedObjective, seedDescription].filter(Boolean).join(" · "),
@@ -89,12 +94,14 @@ export function AskPiConversation({
   const openVarsRef = useRef<TemplateVar[]>([]);
   const resolvedRef = useRef<Record<string, string>>({});
   const channelsRef = useRef<Channel[]>([]);
+  const splitChoiceRef = useRef<"split" | "broadcast" | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const intentRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { openVarsRef.current = openVars; }, [openVars]);
   useEffect(() => { resolvedRef.current = resolved; }, [resolved]);
   useEffect(() => { channelsRef.current = channels; }, [channels]);
+  useEffect(() => { splitChoiceRef.current = splitChoice; }, [splitChoice]);
   useEffect(() => { onPhaseChange?.(phase); }, [phase, onPhaseChange]);
 
   // Reset whenever the panel (re)opens.
@@ -116,6 +123,7 @@ export function AskPiConversation({
     setBriefText("");
     setBriefConfig(null);
     setObjective("");
+    setSplitChoice(null);
     pendingPlanRef.current = null;
   }, [active]);
 
@@ -177,10 +185,13 @@ export function AskPiConversation({
 
   function confirmBrief() {
     if (!briefConfig) return;
-    const norm: BriefConfig = {
-      ...briefConfig,
-      channels: briefConfig.fallback ? [briefConfig.primary, briefConfig.fallback] : [briefConfig.primary],
-    };
+    // With a fallback it's a primary→fallback chain. With no fallback but several
+    // channels selected, keep them all (priority first) so the audience can be
+    // split across them; a single channel stays single.
+    const channels: Channel[] = briefConfig.fallback
+      ? [briefConfig.primary, briefConfig.fallback]
+      : [briefConfig.primary, ...briefConfig.channels.filter((c) => c !== briefConfig.primary)];
+    const norm: BriefConfig = { ...briefConfig, channels };
     startA2(briefText, norm);
   }
 
@@ -191,6 +202,77 @@ export function AskPiConversation({
     const tpl = matchTemplate(text);
     if (tpl) startA1(tpl);
     else goToBriefConfirm(text);
+  }
+
+  /* ---------------------- journey (chat split) ------------------- */
+
+  // Multiple channels chosen with no fallback → after resolve we ask, in chat,
+  // how the audience flows across them (split by attribute vs. broadcast).
+  const isParallel = useMemo(
+    () => mode === "a2" && channels.length > 1 && !openVars.some((v) => v.kind === "duration"),
+    [mode, channels, openVars],
+  );
+
+  function enterJourney() {
+    const labels = channels.map((c) => CHANNEL_META[c].label).join(" and ");
+    pushPi(`You've picked ${labels} with no fallback. How should the audience flow through them — split by an audience attribute, or reach everyone on both?`);
+    setPhase("journey");
+  }
+
+  function chooseSplit() {
+    pushUser("Split the audience");
+    setSplitChoice("split");
+    pushPi("Got it. Set the attribute and threshold below — contacts at or above it take your priority channel, the rest take the other.");
+    setPhase("splitResolve");
+  }
+
+  function chooseBroadcast() {
+    pushUser("Send to everyone on both");
+    setSplitChoice("broadcast");
+    pushPi("Done — both channels reach the full segment in parallel. Validating the draft…");
+    setPhase("validating");
+  }
+
+  function handleJourneyInput() {
+    const text = input.trim();
+    if (!text) return;
+    setInput("");
+    pushUser(text);
+    const t = text.toLowerCase();
+    if (/split|divide|threshold|segment by|based on|above|below|cart|value|score|loyal/.test(t)) {
+      setSplitChoice("split");
+      pushPi("Got it. Set the attribute and threshold below — contacts at or above it take your priority channel, the rest take the other.");
+      setPhase("splitResolve");
+    } else if (/both|everyone|all|broadcast|same|parallel|no split/.test(t)) {
+      setSplitChoice("broadcast");
+      pushPi("Done — both channels reach the full segment in parallel. Validating the draft…");
+      setPhase("validating");
+    } else {
+      pushPi("I can either split the audience by an attribute (e.g. cart value) or reach everyone on both channels. Which would you like?");
+    }
+  }
+
+  // Split Resolve card readiness — needs an attribute + a numeric threshold.
+  const splitReady = useMemo(
+    () =>
+      !!findSplitAttribute(resolved.splitAttribute) &&
+      !!resolved.splitThreshold &&
+      !Number.isNaN(Number(resolved.splitThreshold)),
+    [resolved],
+  );
+
+  function confirmSplit() {
+    const attr = findSplitAttribute(resolved.splitAttribute);
+    const thr = resolved.splitThreshold;
+    if (attr && thr) {
+      const priorityLabel = channels[0] ? CHANNEL_META[channels[0]].label : "priority channel";
+      const line = `Audience split: ${attr.label} ≥ ${attr.unit}${thr} → ${priorityLabel}`;
+      setAssumptions((prev) => [
+        ...prev.filter((a) => !/^Audience split:/.test(a) && !/both target the full segment/.test(a)),
+        line,
+      ]);
+    }
+    setPhase("validating");
   }
 
   /* ----------------------- brief-confirm edits ------------------- */
@@ -258,14 +340,24 @@ export function AskPiConversation({
   useEffect(() => {
     if (phase !== "validating") return;
     const t = setTimeout(() => {
-      const res = validateResolved(openVarsRef.current, resolvedRef.current, channelsRef.current);
+      const split = splitChoiceRef.current === "split";
+      const vars = split ? [...openVarsRef.current, ...splitVars()] : openVarsRef.current;
+      const res = validateResolved(vars, resolvedRef.current, channelsRef.current);
       setValidationChecks(res.checks);
       if (res.level === "block") {
         setPhase("blocked");
         return;
       }
       const base = pendingPlanRef.current!;
-      const patched = applyResolved(base, resolvedRef.current);
+      let patched = applyResolved(base, resolvedRef.current);
+      if (split) {
+        patched = applySplit(
+          patched,
+          resolvedRef.current.splitAttribute,
+          resolvedRef.current.splitThreshold,
+          channelsRef.current,
+        );
+      }
       pendingPlanRef.current = patched;
       onBuild(patched);
       const warns = res.checks.filter((c) => c.status === "warn").map((c) => c.detail);
@@ -352,22 +444,27 @@ export function AskPiConversation({
       : phase === "briefConfirm" ? "Ask Pi · Confirm channels"
         : phase === "planning" ? "Pi is drafting your campaign"
           : phase === "resolve" ? "Ask Pi · Resolve open variables"
-            : phase === "validating" ? "Validating…"
-              : phase === "blocked" ? "Ask Pi · Validation failed"
-                : phase === "confirm" ? "Ask Pi · Campaign review"
-                  : "Saved as draft v1";
+            : phase === "journey" ? "Ask Pi · Resolve the journey"
+              : phase === "splitResolve" ? "Ask Pi · Split the audience"
+                : phase === "validating" ? "Validating…"
+                  : phase === "blocked" ? "Ask Pi · Validation failed"
+                    : phase === "confirm" ? "Ask Pi · Campaign review"
+                      : "Saved as draft v1";
   const headerSubtitle =
     phase === "intent" ? "Pick a suggested template or describe a campaign"
       : phase === "briefConfirm" ? "Channels, priority & fallback before I draft"
         : phase === "planning" ? "Drafting the journey on the canvas…"
-          : phase === "resolve" ? "Set the open variables, then continue to review"
-            : phase === "validating" ? "Checking audience, channels, approvals & compliance"
-              : phase === "blocked" ? "Fix the blocked checks, then re-validate"
-                : phase === "confirm" ? "Audience, channels & fallback — edit or confirm"
-                  : "Review on canvas · launch separately";
+          : phase === "resolve" ? "Set the open variables, then continue"
+            : phase === "journey" ? "How should the audience flow across channels?"
+              : phase === "splitResolve" ? "Pick the attribute & threshold to split on"
+                : phase === "validating" ? "Checking audience, channels, approvals & compliance"
+                  : phase === "blocked" ? "Fix the blocked checks, then re-validate"
+                    : phase === "confirm" ? "Audience, channels & fallback — edit or confirm"
+                      : "Review on canvas · launch separately";
 
   const PROGRESS: Record<ConversationPhase, number> = {
-    intent: 8, briefConfirm: 22, planning: 35, resolve: 55, validating: 70, blocked: 70, confirm: 88, saved: 100,
+    intent: 8, briefConfirm: 22, planning: 35, resolve: 55, journey: 62, splitResolve: 66,
+    validating: 72, blocked: 72, confirm: 88, saved: 100,
   };
 
   return (
@@ -505,7 +602,7 @@ export function AskPiConversation({
             {/* Priority */}
             <div className="mt-3 grid grid-cols-2 gap-2.5">
               <div>
-                <p className="mb-1 text-[11.5px] font-medium text-foreground">Sends first</p>
+                <p className="mb-1 text-[11.5px] font-medium text-foreground">Priority channel</p>
                 <Select value={briefConfig.primary} onValueChange={(v) => setPrimaryChannel(v as Channel)}>
                   <SelectTrigger className="h-8 text-[12.5px]"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -589,7 +686,7 @@ export function AskPiConversation({
             </div>
 
             <button
-              onClick={() => setPhase("validating")}
+              onClick={() => (isParallel ? enterJourney() : setPhase("validating"))}
               disabled={liveBlocks > 0}
               className={cn(
                 "mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[12px] font-medium transition-all",
@@ -600,9 +697,120 @@ export function AskPiConversation({
             >
               {liveBlocks > 0
                 ? `Set ${liveBlocks} required field${liveBlocks === 1 ? "" : "s"} to continue`
-                : "Continue to campaign review"}
+                : isParallel
+                  ? "Continue to journey"
+                  : "Continue to campaign review"}
               <ArrowRight className="h-3.5 w-3.5" />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Journey — chat: how does the audience split across parallel channels? */}
+      {phase === "journey" && (
+        <div className="px-5 pb-4 pt-3">
+          <ChatTrace messages={messages} />
+          <div className="mt-2.5 rounded-2xl border border-ai/30 bg-ai/[0.03] p-3.5">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-ai/30 bg-ai/5 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-ai">
+              <GitBranch className="h-3 w-3" /> Resolve journey
+            </span>
+
+            <div className="mt-3 grid gap-2">
+              <button
+                onClick={chooseSplit}
+                className="group flex items-start gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 text-left transition-all hover:border-ai/40 hover:bg-ai/[0.03]"
+              >
+                <GitBranch className="mt-0.5 h-4 w-4 shrink-0 text-ai" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[12.5px] font-medium text-foreground">Split the audience</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    Route by an attribute &amp; threshold — priority channel takes one side.
+                  </p>
+                </div>
+                <ArrowRight className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground/50 group-hover:text-ai" />
+              </button>
+              <button
+                onClick={chooseBroadcast}
+                className="group flex items-start gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 text-left transition-all hover:border-ai/40 hover:bg-ai/[0.03]"
+              >
+                <Users className="mt-0.5 h-4 w-4 shrink-0 text-ai" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[12.5px] font-medium text-foreground">Send to everyone</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    Both channels reach the full segment in parallel.
+                  </p>
+                </div>
+                <ArrowRight className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground/50 group-hover:text-ai" />
+              </button>
+            </div>
+
+            {/* Or reply in chat */}
+            <div className="mt-2.5 flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-1.5">
+              <MessageSquare className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleJourneyInput(); } }}
+                placeholder="or reply — e.g. split by cart value"
+                className="min-w-0 flex-1 bg-transparent py-1 text-[12px] text-foreground placeholder:text-muted-foreground/70 focus:outline-none"
+              />
+              <button
+                onClick={handleJourneyInput}
+                disabled={!input.trim()}
+                className={cn(
+                  "shrink-0 rounded-md p-1 transition-colors",
+                  input.trim() ? "text-ai hover:bg-ai/10" : "text-muted-foreground/50",
+                )}
+                aria-label="Send reply"
+              >
+                <Send className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Split resolve — attribute + threshold via structured pickers */}
+      {phase === "splitResolve" && (
+        <div className="px-5 pb-4 pt-3">
+          <ChatTrace messages={messages} />
+          <div className="mt-2.5 rounded-2xl border border-ai/30 bg-ai/[0.03] p-3.5">
+            <div className="flex items-center gap-1.5">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-ai/30 bg-ai/5 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-ai">
+                <GitBranch className="h-3 w-3" /> Split audience
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                {channels[0] ? CHANNEL_META[channels[0]].label : "Priority"} ≥ threshold ·{" "}
+                {channels[1] ? CHANNEL_META[channels[1]].label : "Other"} below
+              </span>
+            </div>
+
+            <div className="mt-3 space-y-3">
+              {splitVars().map((v) => (
+                <ResolveField key={v.key} v={v} value={resolved[v.key] ?? ""} onChange={(val) => setField(v.key, val)} />
+              ))}
+            </div>
+
+            <div className="mt-3.5 flex items-center justify-between gap-2">
+              <button
+                onClick={() => setPhase("journey")}
+                className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-[11.5px] text-muted-foreground hover:text-foreground"
+              >
+                <ChevronLeft className="h-3 w-3" /> Back
+              </button>
+              <button
+                onClick={confirmSplit}
+                disabled={!splitReady}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-[11.5px] font-medium transition-all",
+                  splitReady
+                    ? "bg-ai text-ai-foreground hover:opacity-90"
+                    : "cursor-not-allowed bg-muted text-muted-foreground/60",
+                )}
+              >
+                Continue to review <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -639,7 +847,7 @@ export function AskPiConversation({
             )}
 
             <button
-              onClick={() => setPhase("resolve")}
+              onClick={() => setPhase(splitChoice === "split" ? "splitResolve" : "resolve")}
               className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-foreground px-3 py-2 text-[12px] font-medium text-background transition-all hover:opacity-90"
             >
               <ChevronLeft className="h-3.5 w-3.5" /> Back to fix &amp; re-validate
@@ -679,7 +887,9 @@ export function AskPiConversation({
                     <div className="mt-0.5 flex flex-wrap items-center gap-1 text-[12.5px] text-foreground">
                       {channels.map((ch, i) => (
                         <Fragment key={ch}>
-                          {i > 0 && <ArrowRight className="h-3 w-3 text-muted-foreground" />}
+                          {i > 0 && (isParallel
+                            ? <span className="px-0.5 text-[12px] text-muted-foreground">+</span>
+                            : <ArrowRight className="h-3 w-3 text-muted-foreground" />)}
                           <span className="inline-flex items-center gap-1 rounded-md border border-border bg-muted/40 px-1.5 py-0.5">
                             <ChannelIcon ch={ch} className="h-2.5 w-2.5" /> {CHANNEL_META[ch].label}
                           </span>
@@ -689,6 +899,13 @@ export function AskPiConversation({
                     {review.wait && (
                       <p className="mt-1 text-[11px] text-muted-foreground">
                         Fallback waits {review.wait} after non-delivery.
+                      </p>
+                    )}
+                    {isParallel && (
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        {splitChoice === "split"
+                          ? "Audience split between channels by your threshold rule."
+                          : "Both channels reach the full segment in parallel."}
                       </p>
                     )}
                   </div>
@@ -800,11 +1017,12 @@ function ResolveField({
         {v.required && <span className="ml-1 text-warning">*</span>}
       </label>
 
-      {v.kind === "duration" ? (
+      {v.kind === "duration" || v.kind === "threshold" ? (
         <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={v.default}
+          placeholder={v.kind === "duration" ? v.default : "e.g. 5000"}
+          inputMode={v.kind === "threshold" ? "numeric" : undefined}
           className="h-8 text-[12.5px]"
         />
       ) : (
@@ -813,6 +1031,11 @@ function ResolveField({
             <SelectValue placeholder="Select…" />
           </SelectTrigger>
           <SelectContent>
+            {v.kind === "splitAttribute" && SPLIT_ATTRIBUTES.map((a) => (
+              <SelectItem key={a.id} value={a.id} className="text-[12.5px]">
+                {a.label}{a.unit ? ` · ${a.unit}` : ""}
+              </SelectItem>
+            ))}
             {v.kind === "segment" && SEGMENTS.map((s) => (
               <SelectItem key={s.id} value={s.id} className="text-[12.5px]">
                 {s.label} · {s.size}
@@ -888,4 +1111,35 @@ function ValidationChecklist({ checks, title }: { checks: ValidationCheck[]; tit
 function ChannelIcon({ ch, className = "h-3.5 w-3.5 text-ai" }: { ch: Channel; className?: string }) {
   if (ch === "voice") return <Phone className={className} />;
   return <MessageSquare className={className} />;
+}
+
+/** Compact chat transcript shown on the conversational (journey/split) steps. */
+function ChatTrace({ messages }: { messages: Msg[] }) {
+  if (messages.length === 0) return null;
+  return (
+    <div className="space-y-1.5">
+      {messages.map((m) => (
+        <div
+          key={m.id}
+          className={cn("flex", m.from === "user" ? "justify-end" : "justify-start")}
+        >
+          <div
+            className={cn(
+              "max-w-[85%] rounded-2xl px-3 py-1.5 text-[12px] leading-relaxed",
+              m.from === "user"
+                ? "bg-foreground text-background"
+                : "border border-border bg-card text-foreground",
+            )}
+          >
+            {m.from === "pi" && (
+              <span className="mb-0.5 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wider text-ai">
+                <Sparkles className="h-2.5 w-2.5" /> Pi
+              </span>
+            )}
+            {m.text}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
