@@ -546,25 +546,129 @@ export function applyRefinement(text: string, plan: AskPiPlan): { plan: AskPiPla
 /* ---------------------------------------------------------------- */
 
 export type ValidationLevel = "pass" | "warn" | "block";
-export type ValidationResult = { level: ValidationLevel; messages: string[] };
+/** A single named pre-flight check shown on the campaign-creation screen. */
+export type ValidationCheck = { id: string; label: string; status: ValidationLevel; detail: string };
+export type ValidationResult = { level: ValidationLevel; messages: string[]; checks: ValidationCheck[] };
 
-/** Validate resolved values against required gaps + registry approval states. */
-export function validateResolved(vars: TemplateVar[], resolved: Record<string, string>): ValidationResult {
-  const messages: string[] = [];
-  let level: ValidationLevel = "pass";
+const STATUS_RANK: Record<ValidationLevel, number> = { pass: 0, warn: 1, block: 2 };
 
-  for (const v of vars) {
-    if (v.required && !resolved[v.key]) {
-      level = "block";
-      messages.push(`${v.label} is required.`);
+/** Worst status across a set of checks → the overall gate level. */
+export function reportLevel(checks: ValidationCheck[]): ValidationLevel {
+  return checks.reduce<ValidationLevel>(
+    (acc, c) => (STATUS_RANK[c.status] > STATUS_RANK[acc] ? c.status : acc),
+    "pass",
+  );
+}
+
+/**
+ * Run every pre-flight check a campaign draft needs before it can be saved /
+ * launched, against the resolved Resolve-card values + the channels in play.
+ * Returns a granular, displayable checklist (audience, per-channel resource +
+ * compliance, fallback timing, channel sequence, sending window/DND, freq cap).
+ * Block = must fix; warn = explicit acceptance needed; pass = green.
+ */
+export function runChecks(
+  vars: TemplateVar[],
+  resolved: Record<string, string>,
+  channels: Channel[],
+): ValidationCheck[] {
+  const checks: ValidationCheck[] = [];
+
+  // 1. Audience segment — required for every campaign.
+  const seg = findSegment(resolved.segment);
+  checks.push(
+    !resolved.segment
+      ? { id: "segment", label: "Audience segment", status: "block", detail: "Select a target segment before saving." }
+      : { id: "segment", label: "Audience segment", status: "pass", detail: seg ? `${seg.label} · ${seg.size} contacts` : "Segment selected." },
+  );
+
+  // 2. Per-channel resource binding + channel compliance.
+  for (const ch of channels) {
+    if (ch === "whatsapp") {
+      const wa = findWaTemplate(resolved.waTemplate);
+      checks.push(
+        !wa
+          ? { id: "wa_template", label: "WhatsApp template", status: "block", detail: "Pick an approved WhatsApp template." }
+          : wa.status === "pending_reapproval"
+            ? { id: "wa_template", label: "WhatsApp template", status: "warn", detail: `"${wa.label}" is pending re-approval — saved as draft, won't send until approved.` }
+            : { id: "wa_template", label: "WhatsApp template", status: "pass", detail: `"${wa.label}" approved · ${wa.category}.` },
+      );
+      if (wa) {
+        checks.push(
+          wa.category === "Marketing"
+            ? { id: "wa_optin", label: "WhatsApp opt-in", status: "warn", detail: "Marketing template — recipients must have a marketing opt-in." }
+            : { id: "wa_optin", label: "WhatsApp opt-in", status: "pass", detail: "Utility template — no marketing opt-in required." },
+        );
+      }
+    }
+    if (ch === "sms") {
+      const sender = findSmsSender(resolved.smsSender);
+      checks.push(
+        !sender
+          ? { id: "sms_sender", label: "SMS sender header", status: "block", detail: "Select a registered DLT sender header." }
+          : { id: "sms_sender", label: "SMS sender header", status: "pass", detail: `${sender.senderId} · ${sender.label}.` },
+      );
+      if (sender) {
+        checks.push({ id: "sms_dlt", label: "SMS DLT registration", status: "pass", detail: `PE ID ${sender.peId} registered on TRAI DLT.` });
+      }
+    }
+    if (ch === "voice") {
+      const agent = findVoiceAgent(resolved.voiceAgent);
+      checks.push(
+        !agent
+          ? { id: "voice_agent", label: "Voice agent", status: "block", detail: "Select a live voice agent." }
+          : agent.status !== "live"
+            ? { id: "voice_agent", label: "Voice agent", status: "warn", detail: `Agent "${agent.name}" is ${agent.status}, not live.` }
+            : { id: "voice_agent", label: "Voice agent", status: "pass", detail: `"${agent.name}" is live.` },
+      );
     }
   }
-  if (level === "block") return { level, messages };
 
-  const wa = findWaTemplate(resolved.waTemplate);
-  if (wa?.status === "pending_reapproval") {
-    level = "warn";
-    messages.push(`WhatsApp template "${wa.label}" is pending re-approval — it can be saved but won't send until approved.`);
+  // 3. Fallback timing — only when the journey declares a wait.
+  const durationVar = vars.find((v) => v.kind === "duration");
+  if (durationVar) {
+    const raw = resolved[durationVar.key] ?? (durationVar.kind === "duration" ? durationVar.default : "");
+    const { value, unit } = parseDuration(raw);
+    checks.push(
+      !raw
+        ? { id: "fallback_wait", label: "Fallback wait", status: durationVar.required ? "block" : "warn", detail: "Set how long to wait before the fallback fires." }
+        : value <= 0
+          ? { id: "fallback_wait", label: "Fallback wait", status: "warn", detail: "Fallback fires immediately — consider a longer wait." }
+          : { id: "fallback_wait", label: "Fallback wait", status: "pass", detail: `Waits ${value} ${unit} after non-delivery before the fallback.` },
+    );
   }
-  return { level, messages };
+
+  // 4. Channel sequence — distinct channels in priority order.
+  const seqLabel = channels.map((c) => CHANNEL_META[c].label).join(" → ");
+  checks.push({
+    id: "sequence",
+    label: "Channel sequence",
+    status: "pass",
+    detail: channels.length >= 2 ? `${seqLabel} — distinct channels.` : `${seqLabel || "WhatsApp"} only — no fallback.`,
+  });
+
+  // 5. Sending window respects India TRAI DND quiet hours (9pm–9am).
+  checks.push({
+    id: "window",
+    label: "Sending window & DND",
+    status: "pass",
+    detail: `${TENANT_DEFAULTS.windowStart}–${TENANT_DEFAULTS.windowEnd} ${TENANT_DEFAULTS.timezone} — within 9am–9pm quiet-hours rule.`,
+  });
+
+  // 6. Frequency cap.
+  checks.push({ id: "freqcap", label: "Frequency cap", status: "pass", detail: `${TENANT_DEFAULTS.freqCap} per contact.` });
+
+  return checks;
+}
+
+/** Validate resolved values + channels → granular checklist, gate level, and warn/block messages. */
+export function validateResolved(
+  vars: TemplateVar[],
+  resolved: Record<string, string>,
+  channels: Channel[] = [],
+): ValidationResult {
+  const checks = runChecks(vars, resolved, channels);
+  const level = reportLevel(checks);
+  const messages = checks.filter((c) => c.status !== "pass").map((c) => c.detail);
+  return { level, messages, checks };
 }

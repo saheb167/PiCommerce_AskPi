@@ -186,7 +186,7 @@ export function AiComposer({
           {/* Wizard mode body — conversational campaign builder */}
           {isWizard && (
             <div className="relative">
-              {(wizardPhase === "intent" || wizardPhase === "briefConfirm" || wizardPhase === "resolve" || wizardPhase === "confirm") && (
+              {(wizardPhase === "intent" || wizardPhase === "briefConfirm" || wizardPhase === "resolve" || wizardPhase === "blocked" || wizardPhase === "confirm") && (
                 <button
                   onClick={collapse}
                   className="absolute right-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"

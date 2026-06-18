@@ -1,21 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Sparkles, Check, Loader2, ChevronLeft, ArrowRight, ArrowUp,
-  AlertTriangle, Wand2, FileText, MessageSquare, Phone,
+  AlertTriangle, XCircle, ShieldCheck, Wand2, FileText, MessageSquare, Phone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
-import { buildSkeleton, BUILD_STEPS, type AskPiPlan } from "./AskPiWizard";
+import { buildSkeleton, type AskPiPlan } from "./AskPiWizard";
 import {
   SEGMENTS, WA_TEMPLATES, SMS_SENDERS, VOICE_AGENTS,
   CHANNEL_META, CHANNEL_SAMPLE,
   matchTemplate, planFromBrief, analyzeBrief, suggestTemplates, channelsSummary,
-  applyResolved, applyRefinement, validateResolved,
+  applyResolved, applyRefinement, validateResolved, runChecks,
   type CampaignTemplate, type BriefPlan, type TemplateVar,
-  type BriefConfig, type Channel,
+  type BriefConfig, type Channel, type ValidationCheck,
 } from "@/lib/tenant-registry";
 
 /* ----------------------------------------------------------------- */
@@ -23,7 +23,7 @@ import {
 /* ----------------------------------------------------------------- */
 
 export type ConversationPhase =
-  | "intent" | "briefConfirm" | "planning" | "resolve" | "validating" | "confirm" | "saved";
+  | "intent" | "briefConfirm" | "planning" | "resolve" | "validating" | "blocked" | "confirm" | "saved";
 
 type Mode = "a1" | "a2";
 type Msg = { id: string; from: "pi" | "user"; text: string };
@@ -42,6 +42,23 @@ export type AskPiConversationProps = {
 };
 
 const CHANNEL_ORDER: Channel[] = ["whatsapp", "sms", "voice"];
+
+// Logical, mode-aware "thinking" steps shown while Pi drafts the journey.
+// A1 instantiates an approved template; A2 reasons from a free-text brief.
+const A1_PLAN_STEPS = [
+  "Loading the approved template…",
+  "Pre-filling tenant defaults — window, frequency cap, sender header…",
+  "Instantiating the journey nodes…",
+  "Wiring channel steps & the fallback branch…",
+  "Rendering the draft on the canvas…",
+];
+const A2_PLAN_STEPS = [
+  "Reading your brief…",
+  "Resolving tenant registries — segments, templates, senders…",
+  "Selecting channels & the send sequence…",
+  "Wiring the fallback branch with real IDs…",
+  "Rendering the draft on the canvas…",
+];
 
 let _mid = 0;
 const nextId = () => `m${++_mid}`;
@@ -71,6 +88,7 @@ export function AskPiConversation({
   const [resolved, setResolved] = useState<Record<string, string>>({});
   const [assumptions, setAssumptions] = useState<string[]>([]);
   const [warnMessages, setWarnMessages] = useState<string[]>([]);
+  const [validationChecks, setValidationChecks] = useState<ValidationCheck[]>([]);
   const [buildStepIdx, setBuildStepIdx] = useState(0);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [briefText, setBriefText] = useState("");
@@ -81,16 +99,19 @@ export function AskPiConversation({
     [seedName, seedObjective, seedDescription],
   );
   const suggestedTemplates = useMemo(() => suggestTemplates(seedText), [seedText]);
+  const planSteps = mode === "a1" ? A1_PLAN_STEPS : A2_PLAN_STEPS;
 
   // Refs to read fresh values inside timeouts.
   const pendingPlanRef = useRef<AskPiPlan | null>(null);
   const openVarsRef = useRef<TemplateVar[]>([]);
   const resolvedRef = useRef<Record<string, string>>({});
+  const channelsRef = useRef<Channel[]>([]);
   const logRef = useRef<HTMLDivElement>(null);
   const intentRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => { openVarsRef.current = openVars; }, [openVars]);
   useEffect(() => { resolvedRef.current = resolved; }, [resolved]);
+  useEffect(() => { channelsRef.current = channels; }, [channels]);
   useEffect(() => { onPhaseChange?.(phase); }, [phase, onPhaseChange]);
 
   // Reset whenever the panel (re)opens.
@@ -107,6 +128,7 @@ export function AskPiConversation({
     setResolved({});
     setAssumptions([]);
     setWarnMessages([]);
+    setValidationChecks([]);
     setBuildStepIdx(0);
     setChannels([]);
     setBriefText("");
@@ -241,7 +263,7 @@ export function AskPiConversation({
     onSkeleton(buildSkeleton(p));
     setBuildStepIdx(0);
     const tick = setInterval(
-      () => setBuildStepIdx((i) => Math.min(i + 1, BUILD_STEPS.length - 1)),
+      () => setBuildStepIdx((i) => Math.min(i + 1, planSteps.length - 1)),
       650,
     );
     const done = setTimeout(() => {
@@ -266,23 +288,25 @@ export function AskPiConversation({
   useEffect(() => {
     if (phase !== "validating") return;
     const t = setTimeout(() => {
-      const res = validateResolved(openVarsRef.current, resolvedRef.current);
+      const res = validateResolved(openVarsRef.current, resolvedRef.current, channelsRef.current);
+      setValidationChecks(res.checks);
       if (res.level === "block") {
-        res.messages.forEach(pushPi);
-        pushPi("Fix that above, then submit again.");
-        setPhase("resolve");
+        const blocks = res.checks.filter((c) => c.status === "block");
+        pushPi(`Validation failed — ${blocks.length} check${blocks.length === 1 ? "" : "s"} blocked the draft. Review the card below.`);
+        setPhase("blocked");
         return;
       }
       const base = pendingPlanRef.current!;
       const patched = applyResolved(base, resolvedRef.current);
       pendingPlanRef.current = patched;
       onBuild(patched);
+      const warns = res.checks.filter((c) => c.status === "warn").map((c) => c.detail);
       if (res.level === "warn") {
-        setWarnMessages(res.messages);
-        pushPi("Validated with a warning — you'll accept it explicitly on the next step.");
+        setWarnMessages(warns);
+        pushPi(`All ${res.checks.length} checks ran — ${warns.length} need explicit acceptance on the next step.`);
       } else {
         setWarnMessages([]);
-        pushPi("Validation passed. Here's the final review.");
+        pushPi(`All ${res.checks.length} validation checks passed. Here's the final review.`);
       }
       setPhase("confirm");
     }, 1000);
@@ -295,9 +319,15 @@ export function AskPiConversation({
   const setField = (key: string, val: string) =>
     setResolved((r) => ({ ...r, [key]: val }));
 
-  const canSubmitResolve = useMemo(
-    () => openVars.filter((v) => v.required).every((v) => (resolved[v.key] ?? "").length > 0),
-    [openVars, resolved],
+  // Live pre-flight checks shown under the Resolve fields so the user sees
+  // exactly what's still blocking before they hit "Validate & continue".
+  const liveChecks = useMemo(
+    () => (openVars.length ? runChecks(openVars, resolved, channels) : []),
+    [openVars, resolved, channels],
+  );
+  const liveBlocks = useMemo(
+    () => liveChecks.filter((c) => c.status === "block").length,
+    [liveChecks],
   );
 
   function handleRefine() {
@@ -354,31 +384,38 @@ export function AskPiConversation({
         : phase === "planning" ? "Pi is drafting your campaign"
           : phase === "resolve" ? "Ask Pi · Resolve open variables"
             : phase === "validating" ? "Validating…"
-              : phase === "confirm" ? "Ask Pi · Confirm draft"
-                : "Saved as draft v1";
+              : phase === "blocked" ? "Ask Pi · Validation failed"
+                : phase === "confirm" ? "Ask Pi · Confirm draft"
+                  : "Saved as draft v1";
   const headerSubtitle =
     phase === "intent" ? "Pick a suggested template or describe a campaign"
       : phase === "briefConfirm" ? "Channels, priority & fallback before I draft"
-        : phase === "planning" ? BUILD_STEPS[buildStepIdx]
+        : phase === "planning" ? planSteps[buildStepIdx]
           : phase === "resolve" ? "Only the open variables — pickers list approved IDs only"
-            : phase === "validating" ? "Checking required fields & approval state"
-              : phase === "confirm" ? "Review the sample messages and assumptions"
-                : "Review on canvas · launch separately";
+            : phase === "validating" ? "Checking audience, channels, approvals & compliance"
+              : phase === "blocked" ? "Fix the blocked checks, then re-validate"
+                : phase === "confirm" ? "Review the sample messages and assumptions"
+                  : "Review on canvas · launch separately";
 
   const PROGRESS: Record<ConversationPhase, number> = {
-    intent: 8, briefConfirm: 22, planning: 35, resolve: 55, validating: 70, confirm: 88, saved: 100,
+    intent: 8, briefConfirm: 22, planning: 35, resolve: 55, validating: 70, blocked: 70, confirm: 88, saved: 100,
   };
 
   return (
     <div className="animate-fade-in">
       {/* Header */}
       <div className="flex items-center gap-2.5 px-5 pb-2 pt-3.5">
-        <div className="flex h-7 w-7 items-center justify-center rounded-md bg-ai/10">
+        <div className={cn(
+          "flex h-7 w-7 items-center justify-center rounded-md",
+          phase === "blocked" ? "bg-destructive/10" : "bg-ai/10",
+        )}>
           {phase === "planning" || phase === "validating"
             ? <Loader2 className="h-3.5 w-3.5 animate-spin text-ai" />
             : phase === "saved"
               ? <Check className="h-3.5 w-3.5 text-success" />
-              : <Sparkles className="h-3.5 w-3.5 text-ai" />}
+              : phase === "blocked"
+                ? <XCircle className="h-3.5 w-3.5 text-destructive" />
+                : <Sparkles className="h-3.5 w-3.5 text-ai" />}
         </div>
         <div className="min-w-0 flex-1 leading-tight">
           <p className="truncate text-[12.5px] font-medium text-foreground">{headerTitle}</p>
@@ -580,7 +617,7 @@ export function AskPiConversation({
       {phase === "planning" && (
         <div className="px-5 pb-4 pt-3">
           <ul className="space-y-1">
-            {BUILD_STEPS.map((s, i) => (
+            {planSteps.map((s, i) => (
               <li
                 key={s}
                 className={cn(
@@ -618,17 +655,18 @@ export function AskPiConversation({
               ))}
             </div>
 
+            {liveChecks.length > 0 && (
+              <div className="mt-3.5">
+                <ValidationChecklist checks={liveChecks} title="Pre-flight checks" />
+              </div>
+            )}
+
             <button
               onClick={() => setPhase("validating")}
-              disabled={!canSubmitResolve}
-              className={cn(
-                "mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[12px] font-medium transition-all",
-                canSubmitResolve
-                  ? "bg-ai text-ai-foreground hover:opacity-90"
-                  : "cursor-not-allowed bg-muted text-muted-foreground/60",
-              )}
+              className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-ai px-3 py-2 text-[12px] font-medium text-ai-foreground transition-all hover:opacity-90"
             >
-              Validate &amp; continue <ArrowRight className="h-3.5 w-3.5" />
+              {liveBlocks > 0 ? "Run validation" : "Validate & continue"}
+              <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </div>
 
@@ -665,6 +703,40 @@ export function AskPiConversation({
         </div>
       )}
 
+      {/* Validation-failed card — shown when one or more checks block the draft */}
+      {phase === "blocked" && (
+        <div className="px-5 pb-4 pt-3">
+          <div className="rounded-2xl border border-destructive/40 bg-destructive/[0.04] p-3.5">
+            <div className="flex items-center gap-1.5">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-destructive/40 bg-destructive/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-destructive">
+                <XCircle className="h-3 w-3" /> Validation failed
+              </span>
+              <span className="text-[11px] text-muted-foreground">
+                {validationChecks.filter((c) => c.status === "block").length} check
+                {validationChecks.filter((c) => c.status === "block").length === 1 ? "" : "s"} need fixing
+              </span>
+            </div>
+
+            <p className="mt-2.5 text-[12px] leading-relaxed text-muted-foreground">
+              The draft can&rsquo;t move to confirmation until these are resolved. Fix the flagged items, then re-validate.
+            </p>
+
+            {validationChecks.length > 0 && (
+              <div className="mt-3">
+                <ValidationChecklist checks={validationChecks} title="Validation results" />
+              </div>
+            )}
+
+            <button
+              onClick={() => setPhase("resolve")}
+              className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-foreground px-3 py-2 text-[12px] font-medium text-background transition-all hover:opacity-90"
+            >
+              <ChevronLeft className="h-3.5 w-3.5" /> Back to fix &amp; re-validate
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Confirm card */}
       {phase === "confirm" && (
         <div className="px-5 pb-4 pt-3">
@@ -672,6 +744,10 @@ export function AskPiConversation({
             {samplePreviews.map((s) => (
               <SamplePreview key={s.ch} icon={<ChannelIcon ch={s.ch} />} label={s.label} body={s.body} />
             ))}
+
+            {validationChecks.length > 0 && (
+              <ValidationChecklist checks={validationChecks} title="Validation checks" />
+            )}
 
             <div className="rounded-xl border border-border bg-card px-3 py-2.5">
               <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Assumptions</p>
@@ -685,12 +761,11 @@ export function AskPiConversation({
             </div>
 
             {warnMessages.length > 0 && (
-              <div className="rounded-xl border border-warning/40 bg-warning/5 px-3 py-2.5">
-                {warnMessages.map((w) => (
-                  <p key={w} className="flex items-start gap-1.5 text-[12px] text-foreground">
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" /> {w}
-                  </p>
-                ))}
+              <div className="flex items-start gap-1.5 rounded-xl border border-warning/40 bg-warning/5 px-3 py-2.5 text-[12px] text-foreground">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+                <span>
+                  {warnMessages.length} warning{warnMessages.length === 1 ? "" : "s"} above — &ldquo;Accept &amp; confirm&rdquo; saves the draft anyway; it won&rsquo;t launch until resolved.
+                </span>
               </div>
             )}
           </div>
@@ -784,6 +859,44 @@ function ResolveField({
           </SelectContent>
         </Select>
       )}
+    </div>
+  );
+}
+
+/** Granular pre-flight validation checklist shown on the Resolve + Confirm cards. */
+function ValidationChecklist({ checks, title }: { checks: ValidationCheck[]; title: string }) {
+  const blocks = checks.filter((c) => c.status === "block").length;
+  const warns = checks.filter((c) => c.status === "warn").length;
+  const passes = checks.length - blocks - warns;
+  return (
+    <div className="rounded-xl border border-border bg-card px-3 py-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <ShieldCheck className="h-3.5 w-3.5 text-ai" /> {title}
+        </p>
+        <span className="flex shrink-0 items-center gap-2 text-[10px] font-medium">
+          <span className="text-success">{passes} pass</span>
+          {warns > 0 && <span className="text-warning">{warns} warn</span>}
+          {blocks > 0 && <span className="text-destructive">{blocks} blocked</span>}
+        </span>
+      </div>
+      <ul className="mt-2 space-y-1.5">
+        {checks.map((c) => (
+          <li key={c.id} className="flex items-start gap-1.5 text-[12px] leading-relaxed">
+            {c.status === "pass" ? (
+              <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-success" />
+            ) : c.status === "warn" ? (
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+            ) : (
+              <XCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-destructive" />
+            )}
+            <span className="min-w-0">
+              <span className="font-medium text-foreground">{c.label}</span>
+              <span className="text-muted-foreground"> — {c.detail}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
