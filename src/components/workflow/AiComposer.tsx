@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Square, Check, Loader2, Sparkle, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { AskPiWizardBody, type AskPiPlan, type WizardPhase } from "./AskPiWizard";
+import type { AskPiPlan } from "./AskPiWizard";
+import { AskPiConversation, type ConversationPhase } from "./AskPiConversation";
 
 type State = "collapsed" | "idle" | "typing" | "thinking" | "result" | "wizard";
 
@@ -20,6 +21,8 @@ export type AiComposerProps = {
   onWizardSkeleton?: (skeleton: AskPiPlan) => void;
   onWizardBuild?: (plan: AskPiPlan) => void;
   onBuildingChange?: (building: boolean) => void;
+  /** Fires when the conversation saves a versioned draft (e.g. "v1"). */
+  onSavedDraft?: (version: string) => void;
 };
 
 export function AiComposer({
@@ -29,10 +32,11 @@ export function AiComposer({
   onWizardSkeleton,
   onWizardBuild,
   onBuildingChange,
+  onSavedDraft,
 }: AiComposerProps = {}) {
   const [state, setState] = useState<State>("collapsed");
   const [value, setValue] = useState("");
-  const [wizardPhase, setWizardPhase] = useState<WizardPhase>("asking");
+  const [wizardPhase, setWizardPhase] = useState<ConversationPhase>("intent");
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
   const [hasEngaged, setHasEngaged] = useState(false);
   // The blank-canvas build wizard runs once. After it completes, Ask Pi becomes a chat composer.
@@ -49,22 +53,23 @@ export function AiComposer({
     if (value.length === 0 && state === "typing") setState("idle");
   }, [value, state]);
 
-  // Notify parent of building lock
+  // Notify parent of building lock — freeze the canvas only while Pi is
+  // materializing or validating the draft (the interactive cards stay live).
   useEffect(() => {
-    onBuildingChange?.(state === "wizard" && wizardPhase === "building");
+    onBuildingChange?.(state === "wizard" && (wizardPhase === "planning" || wizardPhase === "validating"));
   }, [state, wizardPhase, onBuildingChange]);
 
-  // Mark engaged + built once the wizard completes — nudge won't reappear, and
-  // Ask Pi switches from the one-time build wizard to a persistent chat composer.
+  // Mark engaged + built once the draft is saved — nudge won't reappear, and
+  // Ask Pi switches from the conversational builder to a persistent chat composer.
   useEffect(() => {
-    if (wizardPhase === "done") { setHasEngaged(true); setBuilt(true); }
+    if (wizardPhase === "saved") { setHasEngaged(true); setBuilt(true); }
   }, [wizardPhase]);
 
-  // When the build wizard finishes, collapse Ask Pi back to its floating pill.
+  // When the draft is saved, collapse Ask Pi back to its floating pill.
   // Clicking the pill reopens it as the persistent chat composer (built ⇒ no wizard).
   useEffect(() => {
-    if (state === "wizard" && wizardPhase === "done") {
-      const t = setTimeout(() => setState("collapsed"), 600);
+    if (state === "wizard" && wizardPhase === "saved") {
+      const t = setTimeout(() => setState("collapsed"), 1600);
       return () => clearTimeout(t);
     }
   }, [state, wizardPhase]);
@@ -81,7 +86,7 @@ export function AiComposer({
   };
 
   const collapse = () => {
-    if (state === "wizard" && wizardPhase === "building") return;
+    if (state === "wizard" && (wizardPhase === "planning" || wizardPhase === "validating")) return;
     setValue("");
     setState("collapsed");
   };
@@ -171,10 +176,10 @@ export function AiComposer({
             isWizard ? "w-[640px]" : expandedTall ? "w-[680px]" : "w-[680px]",
           )}
         >
-          {/* Wizard mode body */}
+          {/* Wizard mode body — conversational campaign builder */}
           {isWizard && (
             <div className="relative">
-              {(wizardPhase === "asking" || wizardPhase === "review") && (
+              {(wizardPhase === "intent" || wizardPhase === "resolve" || wizardPhase === "confirm") && (
                 <button
                   onClick={collapse}
                   className="absolute right-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -183,11 +188,12 @@ export function AiComposer({
                   <X className="h-3.5 w-3.5" />
                 </button>
               )}
-              <AskPiWizardBody
+              <AskPiConversation
                 active={isWizard}
                 onSkeleton={(s) => onWizardSkeleton?.(s)}
                 onBuild={(p) => onWizardBuild?.(p)}
                 onPhaseChange={setWizardPhase}
+                onSavedDraft={(v) => onSavedDraft?.(v)}
               />
             </div>
           )}

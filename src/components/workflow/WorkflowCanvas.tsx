@@ -5,6 +5,7 @@ import ReactFlow, {
   type Connection, type Edge, type Node, type NodeMouseHandler,
   type ReactFlowInstance,
 } from "reactflow";
+import { toast } from "sonner";
 import { nodeTypes } from "./nodes";
 import type { WorkflowNodeData, NodeKind, CampaignStatus } from "@/lib/campaign-types";
 import { NODE_LABELS } from "@/lib/campaign-types";
@@ -325,6 +326,12 @@ export function WorkflowCanvas({
           onAiBuiltName?.(plan.name);
           onDirty?.();
           refit();
+        }}
+        onSavedDraft={(v) => {
+          onDirty?.();
+          toast.success(`Saved as draft ${v}`, {
+            description: "Review on the canvas — launch is a separate step.",
+          });
         }}
       />
     </div>
