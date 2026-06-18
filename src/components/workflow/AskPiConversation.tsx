@@ -402,9 +402,11 @@ export function AskPiConversation({
   };
 
   return (
-    <div className="animate-fade-in">
-      {/* Header */}
-      <div className="flex items-center gap-2.5 px-5 pb-2 pt-3.5">
+    <div className="flex max-h-[min(600px,75vh)] flex-col animate-fade-in">
+      {/* Pinned: header + progress (stay visible while the body scrolls) */}
+      <div className="shrink-0">
+        {/* Header */}
+        <div className="flex items-center gap-2.5 px-5 pb-2 pt-3.5">
         <div className={cn(
           "flex h-7 w-7 items-center justify-center rounded-md",
           phase === "blocked" ? "bg-destructive/10" : "bg-ai/10",
@@ -423,14 +425,17 @@ export function AskPiConversation({
         </div>
       </div>
 
-      {/* Progress */}
-      <div className="h-[2px] w-full bg-secondary">
-        <div className="h-full bg-ai transition-all duration-500" style={{ width: `${PROGRESS[phase]}%` }} />
+        {/* Progress */}
+        <div className="h-[2px] w-full bg-secondary">
+          <div className="h-full bg-ai transition-all duration-500" style={{ width: `${PROGRESS[phase]}%` }} />
+        </div>
       </div>
 
-      {/* Chat trace */}
-      {messages.length > 0 && (
-        <div ref={logRef} className="scrollbar-thin max-h-44 space-y-2 overflow-y-auto px-5 pt-3">
+      {/* Scrollable conversation body — fixed max height, internal scroll */}
+      <div ref={logRef} className="scrollbar-thin min-h-0 flex-1 overflow-y-auto">
+        {/* Chat trace */}
+        {messages.length > 0 && (
+          <div className="space-y-2 px-5 pt-3">
           {messages.map((m) => (
             <div key={m.id} className={cn("flex gap-2", m.from === "user" && "justify-end")}>
               {m.from === "pi" && (
@@ -798,6 +803,7 @@ export function AskPiConversation({
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
