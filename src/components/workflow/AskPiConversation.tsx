@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { buildSkeleton, type AskPiPlan } from "./AskPiWizard";
 import {
   SEGMENTS, WA_TEMPLATES, SMS_SENDERS, VOICE_AGENTS,
-  CHANNEL_META, CHANNEL_SAMPLE,
+  CHANNEL_META,
   matchTemplate, planFromBrief, analyzeBrief, suggestTemplates, channelsSummary,
   applyResolved, applyRefinement, validateResolved, runChecks,
   type CampaignTemplate, type BriefPlan, type TemplateVar,
@@ -318,23 +318,40 @@ export function AskPiConversation({
     pushPi(`${r.echo} Same node — re-validated, no rebuild.`);
   }
 
+  // Free-text edit from the campaign-review screen. Applies a refinement when
+  // it matches (e.g. fallback wait), then drops the user back into the resolve
+  // loop so they can keep adjusting open variables until it's done.
+  function handleReviewEdit() {
+    const text = refineText.trim();
+    if (!text) return;
+    setRefineText("");
+    pushUser(text);
+    const base = pendingPlanRef.current;
+    if (base) {
+      const r = applyRefinement(text, base);
+      if (r) {
+        pendingPlanRef.current = r.plan;
+        onBuild(r.plan);
+        const durationVar = openVarsRef.current.find((v) => v.kind === "duration");
+        if (durationVar) setResolved((prev) => ({ ...prev, [durationVar.key]: r.duration }));
+        setAssumptions((prev) =>
+          prev.map((a) => (/fallback wait/i.test(a) ? `Fallback wait set to ${r.duration}` : a)),
+        );
+        pushPi(`${r.echo} Adjust anything else below, then continue.`);
+      } else {
+        pushPi("Let's refine it — update the open variables below, then continue.");
+      }
+    }
+    setPhase("resolve");
+  }
+
   function confirmDraft() {
     pushPi("Saved as draft v1 — review on the canvas. Launch stays a separate step.");
     setPhase("saved");
     onSavedDraft?.("v1");
   }
 
-  /* --------------------------- previews -------------------------- */
-
-  const samplePreviews = useMemo(
-    () =>
-      channels.map((ch) => ({
-        ch,
-        label: ch === "voice" ? "Voice opener" : `${CHANNEL_META[ch].label} message`,
-        body: template?.samples?.[ch] ?? CHANNEL_SAMPLE[ch],
-      })),
-    [channels, template],
-  );
+  /* --------------------------- review ---------------------------- */
 
   // Plain-language campaign review derived from the resolved draft.
   const review = useMemo(() => {
@@ -363,16 +380,16 @@ export function AskPiConversation({
           : phase === "resolve" ? "Ask Pi · Resolve open variables"
             : phase === "validating" ? "Validating…"
               : phase === "blocked" ? "Ask Pi · Validation failed"
-                : phase === "confirm" ? "Ask Pi · Confirm draft"
+                : phase === "confirm" ? "Ask Pi · Campaign review"
                   : "Saved as draft v1";
   const headerSubtitle =
     phase === "intent" ? "Pick a suggested template or describe a campaign"
       : phase === "briefConfirm" ? "Channels, priority & fallback before I draft"
         : phase === "planning" ? "Drafting the journey on the canvas…"
-          : phase === "resolve" ? "Complete the pre-flight checks, then validate"
+          : phase === "resolve" ? "Set the open variables, then continue to review"
             : phase === "validating" ? "Checking audience, channels, approvals & compliance"
               : phase === "blocked" ? "Fix the blocked checks, then re-validate"
-                : phase === "confirm" ? "Review the campaign, then confirm"
+                : phase === "confirm" ? "Audience, channels & fallback — edit or confirm"
                   : "Review on canvas · launch separately";
 
   const PROGRESS: Record<ConversationPhase, number> = {
@@ -597,12 +614,6 @@ export function AskPiConversation({
               ))}
             </div>
 
-            {liveChecks.length > 0 && (
-              <div className="mt-3.5">
-                <ValidationChecklist checks={liveChecks} title="Pre-flight checks" />
-              </div>
-            )}
-
             <button
               onClick={() => setPhase("validating")}
               disabled={liveBlocks > 0}
@@ -614,8 +625,8 @@ export function AskPiConversation({
               )}
             >
               {liveBlocks > 0
-                ? `Complete ${liveBlocks} pre-flight check${liveBlocks === 1 ? "" : "s"} to validate`
-                : "Run validation"}
+                ? `Set ${liveBlocks} required field${liveBlocks === 1 ? "" : "s"} to continue`
+                : "Continue to campaign review"}
               <ArrowRight className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -748,11 +759,6 @@ export function AskPiConversation({
               </div>
             </div>
 
-            {/* Sample messages */}
-            {samplePreviews.map((s) => (
-              <SamplePreview key={s.ch} icon={<ChannelIcon ch={s.ch} />} label={s.label} body={s.body} />
-            ))}
-
             {/* Warnings the user needs to set up */}
             {warnChecks.length > 0 && (
               <div className="rounded-xl border border-warning/40 bg-warning/5">
@@ -775,7 +781,29 @@ export function AskPiConversation({
             )}
           </div>
 
-          <div className="mt-3.5 flex items-center justify-between gap-2">
+          {/* Free-text edit — sends the user back into the resolve loop */}
+          <div className="mt-3 flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-1.5">
+            <Wand2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <input
+              value={refineText}
+              onChange={(e) => setRefineText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleReviewEdit(); } }}
+              placeholder="Edit in plain language — e.g. switch the segment, or wait 3 hours"
+              className="min-w-0 flex-1 bg-transparent py-1 text-[12px] text-foreground placeholder:text-muted-foreground/70 focus:outline-none"
+            />
+            <button
+              onClick={handleReviewEdit}
+              disabled={!refineText.trim()}
+              className={cn(
+                "shrink-0 rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
+                refineText.trim() ? "text-ai hover:bg-ai/10" : "text-muted-foreground/50",
+              )}
+            >
+              Edit
+            </button>
+          </div>
+
+          <div className="mt-3 flex items-center justify-between gap-2">
             <button
               onClick={() => setPhase("resolve")}
               className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-[11.5px] text-muted-foreground hover:text-foreground"
@@ -910,15 +938,4 @@ function ValidationChecklist({ checks, title }: { checks: ValidationCheck[]; tit
 function ChannelIcon({ ch, className = "h-3.5 w-3.5 text-ai" }: { ch: Channel; className?: string }) {
   if (ch === "voice") return <Phone className={className} />;
   return <MessageSquare className={className} />;
-}
-
-function SamplePreview({ icon, label, body }: { icon: React.ReactNode; label: string; body: string }) {
-  return (
-    <div className="rounded-xl border border-border bg-card px-3 py-2.5">
-      <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-        {icon} {label}
-      </p>
-      <p className="mt-1.5 text-[12.5px] leading-relaxed text-foreground">{body}</p>
-    </div>
-  );
 }
