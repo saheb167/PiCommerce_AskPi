@@ -11,11 +11,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { buildSkeleton, type AskPiPlan } from "./AskPiWizard";
 import {
-  SEGMENTS, WA_TEMPLATES, SMS_SENDERS, VOICE_AGENTS, SPLIT_ATTRIBUTES,
+  SEGMENTS, WA_TEMPLATES, VOICE_AGENTS, SPLIT_ATTRIBUTES,
   CHANNEL_META,
   matchTemplate, planFromBrief, analyzeBrief, suggestTemplates, channelsSummary,
-  applyResolved, applyRefinement, applySplit, validateResolved, runChecks,
-  splitVars, findSplitAttribute,
+  applyResolved, applyRefinement, applySplit, applyExperiment, validateResolved, runChecks,
+  splitFieldsFor, experimentVars, findSplitAttribute,
   type CampaignTemplate, type BriefPlan, type TemplateVar,
   type BriefConfig, type Channel, type ValidationCheck,
 } from "@/lib/tenant-registry";
@@ -44,7 +44,8 @@ export type AskPiConversationProps = {
   seedObjective?: string;
 };
 
-const CHANNEL_ORDER: Channel[] = ["whatsapp", "sms", "voice"];
+const CHANNEL_ORDER: Channel[] = ["whatsapp", "voice"];
+type SplitChoice = "split" | "broadcast" | "experiment" | null;
 
 let _mid = 0;
 const nextId = () => `m${++_mid}`;
@@ -80,8 +81,9 @@ export function AskPiConversation({
   const [briefConfig, setBriefConfig] = useState<BriefConfig | null>(null);
   const [objective, setObjective] = useState("");
   // null until the journey step; "split" routes through the split Resolve card,
-  // "broadcast" sends both channels to the full segment.
-  const [splitChoice, setSplitChoice] = useState<"split" | "broadcast" | null>(null);
+  // "experiment" through the A/B percentage card, "broadcast" sends both channels
+  // to the full segment.
+  const [splitChoice, setSplitChoice] = useState<SplitChoice>(null);
 
   const seedText = useMemo(
     () => [seedName, seedObjective, seedDescription].filter(Boolean).join(" · "),
@@ -94,7 +96,7 @@ export function AskPiConversation({
   const openVarsRef = useRef<TemplateVar[]>([]);
   const resolvedRef = useRef<Record<string, string>>({});
   const channelsRef = useRef<Channel[]>([]);
-  const splitChoiceRef = useRef<"split" | "broadcast" | null>(null);
+  const splitChoiceRef = useRef<SplitChoice>(null);
   const logRef = useRef<HTMLDivElement>(null);
   const intentRef = useRef<HTMLTextAreaElement>(null);
 
@@ -215,14 +217,22 @@ export function AskPiConversation({
 
   function enterJourney() {
     const labels = channels.map((c) => CHANNEL_META[c].label).join(" and ");
-    pushPi(`You've picked ${labels} with no fallback. How should the audience flow through them — split by an audience attribute, or reach everyone on both?`);
+    const abHint = briefConfig?.experiment ? " — sounds like an A/B test" : "";
+    pushPi(`You've picked ${labels} with no fallback${abHint}. How should the audience flow through them — A/B test the two channels, split by an audience attribute, or reach everyone on both?`);
     setPhase("journey");
+  }
+
+  function chooseExperiment() {
+    pushUser("A/B test the two channels");
+    setSplitChoice("experiment");
+    pushPi("Got it — I'll randomly split the audience between the two channels to compare them. Set the split below (defaults to 50/50).");
+    setPhase("splitResolve");
   }
 
   function chooseSplit() {
     pushUser("Split the audience");
     setSplitChoice("split");
-    pushPi("Got it. Set the attribute and threshold below — contacts at or above it take your priority channel, the rest take the other.");
+    pushPi("Got it. Pick the attribute below — for a numeric attribute, contacts at or above your threshold take the priority channel; for a category, the value you choose takes it.");
     setPhase("splitResolve");
   }
 
@@ -239,38 +249,68 @@ export function AskPiConversation({
     setInput("");
     pushUser(text);
     const t = text.toLowerCase();
-    if (/split|divide|threshold|segment by|based on|above|below|cart|value|score|loyal/.test(t)) {
+    if (/a\/b|a-b|ab test|experiment|test (the )?(two )?channels|head\s?to\s?head/.test(t)) {
+      chooseExperimentFromInput();
+    } else if (/split|divide|threshold|segment by|based on|above|below|cart|value|score|loyal|type|tier|language/.test(t)) {
       setSplitChoice("split");
-      pushPi("Got it. Set the attribute and threshold below — contacts at or above it take your priority channel, the rest take the other.");
+      pushPi("Got it. Pick the attribute below — for a numeric attribute, contacts at or above your threshold take the priority channel; for a category, the value you choose takes it.");
       setPhase("splitResolve");
     } else if (/both|everyone|all|broadcast|same|parallel|no split/.test(t)) {
       setSplitChoice("broadcast");
       pushPi("Done — both channels reach the full segment in parallel. Validating the draft…");
       setPhase("validating");
     } else {
-      pushPi("I can either split the audience by an attribute (e.g. cart value) or reach everyone on both channels. Which would you like?");
+      pushPi("I can A/B test the two channels, split the audience by an attribute (e.g. cart value, customer type), or reach everyone on both. Which would you like?");
     }
   }
 
-  // Split Resolve card readiness — needs an attribute + a numeric threshold.
-  const splitReady = useMemo(
+  function chooseExperimentFromInput() {
+    setSplitChoice("experiment");
+    pushPi("Got it — I'll randomly split the audience between the two channels to compare them. Set the split below (defaults to 50/50).");
+    setPhase("splitResolve");
+  }
+
+  // The open variables the split Resolve card shows, by journey choice:
+  // experiment → the A/B percentage; attribute split → the attribute + its
+  // (numeric threshold | categorical value), shaped by the chosen attribute.
+  const splitFields = useMemo<TemplateVar[]>(
     () =>
-      !!findSplitAttribute(resolved.splitAttribute) &&
-      !!resolved.splitThreshold &&
-      !Number.isNaN(Number(resolved.splitThreshold)),
-    [resolved],
+      splitChoice === "experiment"
+        ? experimentVars()
+        : splitFieldsFor(resolved.splitAttribute),
+    [splitChoice, resolved.splitAttribute],
   );
 
-  function confirmSplit() {
+  // Split Resolve card readiness, by journey choice.
+  const splitReady = useMemo(() => {
+    if (splitChoice === "experiment") {
+      const p = Number(resolved.splitPct);
+      return !Number.isNaN(p) && p >= 1 && p <= 99;
+    }
     const attr = findSplitAttribute(resolved.splitAttribute);
-    const thr = resolved.splitThreshold;
-    if (attr && thr) {
-      const priorityLabel = channels[0] ? CHANNEL_META[channels[0]].label : "priority channel";
-      const line = `Audience split: ${attr.label} ≥ ${attr.unit}${thr} → ${priorityLabel}`;
-      setAssumptions((prev) => [
-        ...prev.filter((a) => !/^Audience split:/.test(a) && !/both target the full segment/.test(a)),
-        line,
-      ]);
+    if (!attr) return false;
+    if (attr.type === "categorical") return !!resolved.splitValue;
+    return !!resolved.splitThreshold && !Number.isNaN(Number(resolved.splitThreshold));
+  }, [splitChoice, resolved]);
+
+  function confirmSplit() {
+    const priorityLabel = channels[0] ? CHANNEL_META[channels[0]].label : "priority channel";
+    const otherLabel = channels[1] ? CHANNEL_META[channels[1]].label : "other channel";
+    const stripPrior = (a: string) =>
+      !/^Audience split:/.test(a) && !/^A\/B test:/.test(a) && !/both target the full segment/.test(a);
+    if (splitChoice === "experiment") {
+      const p = Number(resolved.splitPct);
+      const line = `A/B test: ${p}% ${priorityLabel} / ${100 - p}% ${otherLabel} (random)`;
+      setAssumptions((prev) => [...prev.filter(stripPrior), line]);
+    } else {
+      const attr = findSplitAttribute(resolved.splitAttribute);
+      if (attr && attr.type === "categorical" && resolved.splitValue) {
+        const line = `Audience split: ${attr.label} = ${resolved.splitValue} → ${priorityLabel}`;
+        setAssumptions((prev) => [...prev.filter(stripPrior), line]);
+      } else if (attr && resolved.splitThreshold) {
+        const line = `Audience split: ${attr.label} ≥ ${attr.unit}${resolved.splitThreshold} → ${priorityLabel}`;
+        setAssumptions((prev) => [...prev.filter(stripPrior), line]);
+      }
     }
     setPhase("validating");
   }
@@ -340,8 +380,15 @@ export function AskPiConversation({
   useEffect(() => {
     if (phase !== "validating") return;
     const t = setTimeout(() => {
-      const split = splitChoiceRef.current === "split";
-      const vars = split ? [...openVarsRef.current, ...splitVars()] : openVarsRef.current;
+      const choice = splitChoiceRef.current;
+      const split = choice === "split";
+      const experiment = choice === "experiment";
+      const extra = experiment
+        ? experimentVars()
+        : split
+          ? splitFieldsFor(resolvedRef.current.splitAttribute)
+          : [];
+      const vars = [...openVarsRef.current, ...extra];
       const res = validateResolved(vars, resolvedRef.current, channelsRef.current);
       setValidationChecks(res.checks);
       if (res.level === "block") {
@@ -350,13 +397,14 @@ export function AskPiConversation({
       }
       const base = pendingPlanRef.current!;
       let patched = applyResolved(base, resolvedRef.current);
-      if (split) {
-        patched = applySplit(
-          patched,
-          resolvedRef.current.splitAttribute,
-          resolvedRef.current.splitThreshold,
-          channelsRef.current,
-        );
+      if (experiment) {
+        patched = applyExperiment(patched, resolvedRef.current.splitPct, channelsRef.current);
+      } else if (split) {
+        const attr = findSplitAttribute(resolvedRef.current.splitAttribute);
+        const value = attr?.type === "categorical"
+          ? resolvedRef.current.splitValue
+          : resolvedRef.current.splitThreshold;
+        patched = applySplit(patched, resolvedRef.current.splitAttribute, value, channelsRef.current);
       }
       pendingPlanRef.current = patched;
       onBuild(patched);
@@ -641,6 +689,17 @@ export function AskPiConversation({
 
             <p className="mt-3 text-[11px] text-muted-foreground">{channelsSummary(briefConfig)}.</p>
 
+            {/* Channels the brief asked for that this workspace can't run. */}
+            {briefConfig.unavailable && briefConfig.unavailable.length > 0 && (
+              <div className="mt-2.5 flex items-start gap-1.5 rounded-lg border border-warning/30 bg-warning/5 px-2.5 py-2">
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0 text-warning" />
+                <p className="text-[11px] leading-relaxed text-muted-foreground">
+                  <span className="font-medium text-foreground">{briefConfig.unavailable.join(", ")}</span>{" "}
+                  {briefConfig.unavailable.length === 1 ? "was" : "were"} mentioned but {briefConfig.unavailable.length === 1 ? "isn't" : "aren't"} available here — this workspace supports WhatsApp and Voice (AI) only. I've left {briefConfig.unavailable.length === 1 ? "it" : "them"} out.
+                </p>
+              </div>
+            )}
+
             <div className="mt-3.5 flex items-center justify-between gap-2">
               <button
                 onClick={() => setPhase("intent")}
@@ -717,6 +776,19 @@ export function AskPiConversation({
 
             <div className="mt-3 grid gap-2">
               <button
+                onClick={chooseExperiment}
+                className="group flex items-start gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 text-left transition-all hover:border-ai/40 hover:bg-ai/[0.03]"
+              >
+                <Target className="mt-0.5 h-4 w-4 shrink-0 text-ai" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[12.5px] font-medium text-foreground">A/B test the channels</p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    Randomly split the audience between {channels.map((c) => CHANNEL_META[c].label).join(" &amp; ")} to compare them.
+                  </p>
+                </div>
+                <ArrowRight className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground/50 group-hover:text-ai" />
+              </button>
+              <button
                 onClick={chooseSplit}
                 className="group flex items-start gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 text-left transition-all hover:border-ai/40 hover:bg-ai/[0.03]"
               >
@@ -724,7 +796,7 @@ export function AskPiConversation({
                 <div className="min-w-0 flex-1">
                   <p className="text-[12.5px] font-medium text-foreground">Split the audience</p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    Route by an attribute &amp; threshold — priority channel takes one side.
+                    Route by an attribute — numeric threshold or category value picks the priority channel.
                   </p>
                 </div>
                 <ArrowRight className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground/50 group-hover:text-ai" />
@@ -776,17 +848,31 @@ export function AskPiConversation({
           <ChatTrace messages={messages} />
           <div className="mt-2.5 rounded-2xl border border-ai/30 bg-ai/[0.03] p-3.5">
             <div className="flex items-center gap-1.5">
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-ai/30 bg-ai/5 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-ai">
-                <GitBranch className="h-3 w-3" /> Split audience
-              </span>
-              <span className="text-[11px] text-muted-foreground">
-                {channels[0] ? CHANNEL_META[channels[0]].label : "Priority"} ≥ threshold ·{" "}
-                {channels[1] ? CHANNEL_META[channels[1]].label : "Other"} below
-              </span>
+              {splitChoice === "experiment" ? (
+                <>
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-ai/30 bg-ai/5 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-ai">
+                    <Target className="h-3 w-3" /> A/B test
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {channels[0] ? CHANNEL_META[channels[0]].label : "A"} vs{" "}
+                    {channels[1] ? CHANNEL_META[channels[1]].label : "B"} · random split
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-ai/30 bg-ai/5 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-ai">
+                    <GitBranch className="h-3 w-3" /> Split audience
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {channels[0] ? CHANNEL_META[channels[0]].label : "Priority"} ·{" "}
+                    {channels[1] ? CHANNEL_META[channels[1]].label : "Other"}
+                  </span>
+                </>
+              )}
             </div>
 
             <div className="mt-3 space-y-3">
-              {splitVars().map((v) => (
+              {splitFields.map((v) => (
                 <ResolveField key={v.key} v={v} value={resolved[v.key] ?? ""} onChange={(val) => setField(v.key, val)} />
               ))}
             </div>
@@ -847,7 +933,7 @@ export function AskPiConversation({
             )}
 
             <button
-              onClick={() => setPhase(splitChoice === "split" ? "splitResolve" : "resolve")}
+              onClick={() => setPhase(splitChoice === "split" || splitChoice === "experiment" ? "splitResolve" : "resolve")}
               className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-md bg-foreground px-3 py-2 text-[12px] font-medium text-background transition-all hover:opacity-90"
             >
               <ChevronLeft className="h-3.5 w-3.5" /> Back to fix &amp; re-validate
@@ -903,9 +989,11 @@ export function AskPiConversation({
                     )}
                     {isParallel && (
                       <p className="mt-1 text-[11px] text-muted-foreground">
-                        {splitChoice === "split"
-                          ? "Audience split between channels by your threshold rule."
-                          : "Both channels reach the full segment in parallel."}
+                        {splitChoice === "experiment"
+                          ? "A/B test — audience randomly split between the two channels to compare them."
+                          : splitChoice === "split"
+                            ? "Audience split between channels by your rule."
+                            : "Both channels reach the full segment in parallel."}
                       </p>
                     )}
                   </div>
@@ -1010,6 +1098,12 @@ export function AskPiConversation({
 function ResolveField({
   v, value, onChange,
 }: { v: TemplateVar; value: string; onChange: (val: string) => void }) {
+  // Only live voice agents are bindable; surface a block note if none exist.
+  const liveAgents = VOICE_AGENTS.filter((a) => a.status === "live");
+  const resourceEmpty =
+    (v.kind === "waTemplate" && WA_TEMPLATES.length === 0) ||
+    (v.kind === "voiceAgent" && liveAgents.length === 0);
+
   return (
     <div>
       <label className="mb-1 block text-[11.5px] font-medium text-foreground">
@@ -1017,12 +1111,19 @@ function ResolveField({
         {v.required && <span className="ml-1 text-warning">*</span>}
       </label>
 
-      {v.kind === "duration" || v.kind === "threshold" ? (
+      {resourceEmpty ? (
+        <div className="flex items-start gap-1.5 rounded-md border border-destructive/40 bg-destructive/[0.04] px-2.5 py-2">
+          <XCircle className="mt-0.5 h-3 w-3 shrink-0 text-destructive" />
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            No {v.kind === "waTemplate" ? "approved WhatsApp templates" : "live voice agents"} are available — set one up before this channel can run.
+          </p>
+        </div>
+      ) : v.kind === "duration" || v.kind === "threshold" || v.kind === "percent" ? (
         <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder={v.kind === "duration" ? v.default : "e.g. 5000"}
-          inputMode={v.kind === "threshold" ? "numeric" : undefined}
+          placeholder={v.kind === "duration" ? v.default : v.kind === "percent" ? v.default : "e.g. 5000"}
+          inputMode={v.kind === "threshold" || v.kind === "percent" ? "numeric" : undefined}
           className="h-8 text-[12.5px]"
         />
       ) : (
@@ -1033,7 +1134,12 @@ function ResolveField({
           <SelectContent>
             {v.kind === "splitAttribute" && SPLIT_ATTRIBUTES.map((a) => (
               <SelectItem key={a.id} value={a.id} className="text-[12.5px]">
-                {a.label}{a.unit ? ` · ${a.unit}` : ""}
+                {a.label}{a.unit ? ` · ${a.unit}` : ""}{a.type === "categorical" ? " · category" : ""}
+              </SelectItem>
+            ))}
+            {v.kind === "splitValue" && v.options.map((o) => (
+              <SelectItem key={o} value={o} className="text-[12.5px]">
+                {o}
               </SelectItem>
             ))}
             {v.kind === "segment" && SEGMENTS.map((s) => (
@@ -1053,14 +1159,9 @@ function ResolveField({
                 </span>
               </SelectItem>
             ))}
-            {v.kind === "voiceAgent" && VOICE_AGENTS.map((a) => (
+            {v.kind === "voiceAgent" && liveAgents.map((a) => (
               <SelectItem key={a.id} value={a.id} className="text-[12.5px]">
                 {a.name} · {a.type}
-              </SelectItem>
-            ))}
-            {v.kind === "smsSender" && SMS_SENDERS.map((s) => (
-              <SelectItem key={s.id} value={s.id} className="text-[12.5px]">
-                {s.label} · {s.senderId}
               </SelectItem>
             ))}
           </SelectContent>

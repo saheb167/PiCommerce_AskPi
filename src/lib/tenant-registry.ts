@@ -83,23 +83,61 @@ export type TemplateVar =
   | { key: string; kind: "smsSender"; label: string; required?: boolean }
   | { key: string; kind: "duration"; label: string; default: string; required?: boolean }
   | { key: string; kind: "splitAttribute"; label: string; required?: boolean }
-  | { key: string; kind: "threshold"; label: string; default: string; required?: boolean };
+  | { key: string; kind: "threshold"; label: string; default: string; required?: boolean }
+  | { key: string; kind: "splitValue"; label: string; options: string[]; required?: boolean }
+  | { key: string; kind: "percent"; label: string; default: string; required?: boolean };
 
-/* Audience attributes a no-fallback multi-channel campaign can split on. */
-export type SplitAttribute = { id: string; label: string; unit: string; example: string };
+/**
+ * Audience attributes a no-fallback multi-channel campaign can split on. A
+ * `numeric` attribute splits on a threshold (≥ goes to the priority channel);
+ * a `categorical` attribute splits on a chosen value from `options` (matching
+ * rows go to the priority channel, the rest to the other).
+ */
+export type SplitAttribute = {
+  id: string;
+  label: string;
+  unit: string;
+  example: string;
+  type: "numeric" | "categorical";
+  options?: string[];
+};
 export const SPLIT_ATTRIBUTES: SplitAttribute[] = [
-  { id: "cart_value", label: "Cart value", unit: "₹", example: "5000" },
-  { id: "order_value", label: "Lifetime order value", unit: "₹", example: "25000" },
-  { id: "engagement_score", label: "Engagement score", unit: "", example: "60" },
-  { id: "loyalty_points", label: "Loyalty points", unit: "", example: "1000" },
+  { id: "cart_value", label: "Cart value", unit: "₹", example: "5000", type: "numeric" },
+  { id: "order_value", label: "Lifetime order value", unit: "₹", example: "25000", type: "numeric" },
+  { id: "engagement_score", label: "Engagement score", unit: "", example: "60", type: "numeric" },
+  { id: "loyalty_points", label: "Loyalty points", unit: "", example: "1000", type: "numeric" },
+  { id: "customer_type", label: "Customer type", unit: "", example: "Returning", type: "categorical", options: ["New", "Returning", "VIP"] },
+  { id: "city_tier", label: "City tier", unit: "", example: "Metro", type: "categorical", options: ["Metro", "Tier 2", "Tier 3"] },
+  { id: "language", label: "Preferred language", unit: "", example: "Hindi", type: "categorical", options: ["Hindi", "English", "Tamil"] },
 ];
 export const findSplitAttribute = (id?: string) => SPLIT_ATTRIBUTES.find((a) => a.id === id);
 
-/** The two open variables a split journey adds: the attribute and its threshold. */
-export function splitVars(): TemplateVar[] {
+/**
+ * The open variables a split journey adds, shaped by the chosen attribute:
+ * always the attribute picker, plus a numeric `threshold` OR a categorical
+ * `splitValue` (the value that routes to the priority channel). Before an
+ * attribute is chosen only the picker shows.
+ */
+export function splitFieldsFor(attrId?: string): TemplateVar[] {
+  const attr = findSplitAttribute(attrId);
+  const picker: TemplateVar = { key: "splitAttribute", kind: "splitAttribute", label: "Split audience by", required: true };
+  if (!attr) return [picker];
+  if (attr.type === "categorical") {
+    return [
+      picker,
+      { key: "splitValue", kind: "splitValue", label: `${attr.label} that goes to the priority channel`, options: attr.options ?? [], required: true },
+    ];
+  }
   return [
-    { key: "splitAttribute", kind: "splitAttribute", label: "Split audience by", required: true },
+    picker,
     { key: "splitThreshold", kind: "threshold", label: "Threshold (≥ goes to priority channel)", default: "", required: true },
+  ];
+}
+
+/** The single open variable a channel A/B experiment adds: the % to the priority channel. */
+export function experimentVars(): TemplateVar[] {
+  return [
+    { key: "splitPct", kind: "percent", label: "% of audience to the priority channel (A/B)", default: "50", required: true },
   ];
 }
 
@@ -132,18 +170,27 @@ const durationLabel = (raw: string) => {
 /* Channels — the building blocks for templates and briefs          */
 /* ---------------------------------------------------------------- */
 
-export type Channel = "whatsapp" | "sms" | "voice";
+/**
+ * This workspace supports two channels only: WhatsApp and an AI Voice agent.
+ * Anything else a brief mentions (SMS, email, push, RCS) is surfaced as
+ * "detected but unavailable" rather than silently dropped.
+ */
+export type Channel = "whatsapp" | "voice";
 
 /**
  * The channels / priority / fallback details Pi confirms before drafting an
  * A2 brief (and that back a multi-channel A1 template). `primary` sends first;
  * `fallback` (if any) sends after `fallbackWait` when the primary isn't delivered.
+ * `unavailable` lists channel names the brief asked for that this workspace
+ * doesn't support; `experiment` marks an A/B-test framing (split to compare).
  */
 export type BriefConfig = {
   channels: Channel[];
   primary: Channel;
   fallback: Channel | null;
   fallbackWait: string;
+  unavailable?: string[];
+  experiment?: boolean;
 };
 
 export const CHANNEL_META: Record<
@@ -151,13 +198,11 @@ export const CHANNEL_META: Record<
   { label: string; resourceKind: TemplateVar["kind"]; resourceKey: string; resourceLabel: string }
 > = {
   whatsapp: { label: "WhatsApp", resourceKind: "waTemplate", resourceKey: "waTemplate", resourceLabel: "Approved WhatsApp template" },
-  sms: { label: "SMS", resourceKind: "smsSender", resourceKey: "smsSender", resourceLabel: "SMS sender header" },
-  voice: { label: "Voice", resourceKind: "voiceAgent", resourceKey: "voiceAgent", resourceLabel: "Voice agent" },
+  voice: { label: "Voice (AI)", resourceKind: "voiceAgent", resourceKey: "voiceAgent", resourceLabel: "Voice agent" },
 };
 
 export const CHANNEL_SAMPLE: Record<Channel, string> = {
   whatsapp: "Hi {{1}}, you left items in your cart — complete your order here: {{2}}",
-  sms: "Hi {{first_name}}, your cart is waiting. Finish checkout: {{link}}",
   voice: "\"Hi, this is calling about the items still in your cart — can I help you complete the order now?\"",
 };
 
@@ -177,16 +222,6 @@ function channelNode(ch: Channel, y: number, resolved: Record<string, string>): 
         config: { waNumber: TENANT_DEFAULTS.waNumber, waMode: "template",
           waTemplate: wa ? `${wa.label} · ${wa.category}` : undefined,
           waVarMap: [{ v: "{{1}}", def: "contact.first_name" }, { v: "{{2}}", def: "payload.order_id" }] } } };
-  }
-  if (ch === "sms") {
-    const sender = findSmsSender(resolved.smsSender);
-    return { id: "sms", type: "workflow", position: { x: 0, y },
-      data: { kind: "sms", title: "SMS",
-        subtitle: sender ? `Sender: ${sender.senderId}` : "Add sender",
-        valid: !!sender, error: sender ? undefined : "Select sender",
-        config: { smsType: "Promotional", smsFormat: "Text",
-          senderId: sender?.senderId, peId: sender?.peId,
-          smsBody: "Hi {{first_name}}, complete your order: {{link}}" } } };
   }
   const agent = findVoiceAgent(resolved.voiceAgent);
   return { id: "voice", type: "workflow", position: { x: 0, y },
@@ -237,7 +272,7 @@ function buildFromChannels(name: string, cfg: BriefConfig, resolved: Record<stri
 }
 
 /** Fixed canvas node id for each channel (kept stable for applyResolved patches). */
-const CHANNEL_NODE_ID: Record<Channel, string> = { whatsapp: "wa", sms: "sms", voice: "voice" };
+const CHANNEL_NODE_ID: Record<Channel, string> = { whatsapp: "wa", voice: "voice" };
 
 /**
  * Parallel journey for multiple channels with NO fallback: audience fans out
@@ -297,6 +332,9 @@ function channelOpenVars(cfg: BriefConfig): TemplateVar[] {
 /** Human-readable "Primary X → fallback Y (on non-delivery)" line. */
 export function channelsSummary(cfg: BriefConfig): string {
   const p = CHANNEL_META[cfg.primary].label;
+  if (cfg.experiment && cfg.channels.length > 1) {
+    return `A/B test — ${cfg.channels.map((c) => CHANNEL_META[c].label).join(" vs ")} on a split audience`;
+  }
   if (cfg.fallback) return `Primary ${p} → fallback ${CHANNEL_META[cfg.fallback].label} (on non-delivery)`;
   if (cfg.channels.length > 1) {
     return `${cfg.channels.map((c) => CHANNEL_META[c].label).join(" + ")} in parallel — audience split, no fallback`;
@@ -391,7 +429,7 @@ const tenantAssumptions = (): string[] => [
   `Sender header ${TENANT_DEFAULTS.waNumber}`,
 ];
 
-const CART_CFG: BriefConfig = { channels: ["whatsapp", "sms"], primary: "whatsapp", fallback: "sms", fallbackWait: "6 hours" };
+const CART_CFG: BriefConfig = { channels: ["whatsapp", "voice"], primary: "whatsapp", fallback: "voice", fallbackWait: "6 hours" };
 const DORMANT_CFG: BriefConfig = { channels: ["whatsapp", "voice"], primary: "whatsapp", fallback: "voice", fallbackWait: "1 day" };
 
 export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
@@ -420,14 +458,14 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     id: "abandoned_cart_recovery_v2",
     name: "Abandoned Cart Recovery",
     tenant: "StyleZen",
-    objective: "Win back shoppers who left items in their cart with a WhatsApp nudge and SMS fallback.",
-    summary: "WhatsApp recovery message, falling back to SMS if WhatsApp isn't delivered.",
-    channels: ["whatsapp", "sms"],
+    objective: "Win back shoppers who left items in their cart with a WhatsApp nudge and a voice fallback.",
+    summary: "WhatsApp recovery message, falling back to an AI voice call if WhatsApp isn't delivered.",
+    channels: ["whatsapp", "voice"],
     keywords: ["cart", "abandon", "checkout", "recover", "shop", "ecommerce", "purchase", "basket", "order"],
     assumptions: tenantAssumptions(),
     openVars: channelOpenVars(CART_CFG),
     build: (resolved) => buildFromChannels("Abandoned Cart Recovery", CART_CFG, resolved),
-    samples: { whatsapp: CHANNEL_SAMPLE.whatsapp, sms: CHANNEL_SAMPLE.sms },
+    samples: { whatsapp: CHANNEL_SAMPLE.whatsapp, voice: CHANNEL_SAMPLE.voice },
   },
   {
     id: "dormant_reactivation_v1",
@@ -501,23 +539,38 @@ export function analyzeBrief(text: string): BriefConfig {
   const t = (text || "").toLowerCase();
   const detected: Channel[] = [];
   if (/whats\s?app|\bwa\b/.test(t)) detected.push("whatsapp");
-  if (/\bsms\b|text message|text msg/.test(t)) detected.push("sms");
-  if (/voice|\bcall\b|calling|ivr|phone\b/.test(t)) detected.push("voice");
+  if (/voice|\bcall\b|calling|ivr|phone\b|ai\s?agent/.test(t)) detected.push("voice");
+
+  // Channels this workspace can't run, but the brief asked for — surfaced as a
+  // "detected but unavailable" note rather than silently dropped.
+  const unavailable: string[] = [];
+  if (/\bsms\b|text message|text msg/.test(t)) unavailable.push("SMS");
+  if (/e-?mail/.test(t)) unavailable.push("Email");
+  if (/push notif|\bpush\b/.test(t)) unavailable.push("Push");
+  if (/\brcs\b/.test(t)) unavailable.push("RCS");
+
+  // A/B-test framing: split the audience to compare the two channels.
+  const experiment = /a\/b|a-b|ab test|split test|experiment|test two|two variants|head\s?to\s?head/.test(t);
+
   if (detected.length === 0) detected.push("whatsapp");
+  // An experiment needs two arms — add the other channel if only one was named.
+  if (experiment && detected.length === 1) {
+    detected.push(detected[0] === "whatsapp" ? "voice" : "whatsapp");
+  }
 
   let primary = detected[0];
   let fallback: Channel | null = null;
 
-  // A fallback is only assumed when the brief actually calls one out. Multiple
-  // channels with no fallback phrasing → parallel (audience split), not a chain.
+  // A fallback is only assumed when the brief actually calls one out (and not in
+  // an experiment). Multiple channels with no fallback → parallel/split, not a chain.
   const mentionsFallback = /fall\s?back|if .*(?:fail|not delivered|undelivered|no reply|doesn'?t)/.test(t);
-  if (mentionsFallback && detected.length >= 2) {
+  if (!experiment && mentionsFallback && detected.length >= 2) {
     // Pin the fallback channel from explicit phrasing: prefer "<channel> fallback"
     // (channel right before the word), then "fallback to/on/via <channel>".
-    const toChannel = (s: string): Channel => (/whats/.test(s) ? "whatsapp" : /sms/.test(s) ? "sms" : "voice");
+    const toChannel = (s: string): Channel => (/whats/.test(s) ? "whatsapp" : "voice");
     const fbMatch =
-      t.match(/(whats\s?app|sms|voice|call)\s+fall\s?back/) ??
-      t.match(/fall\s?back\s+(?:to|on|via|with|using)?\s*(whats\s?app|sms|voice|call)/);
+      t.match(/(whats\s?app|voice|call)\s+fall\s?back/) ??
+      t.match(/fall\s?back\s+(?:to|on|via|with|using)?\s*(whats\s?app|voice|call)/);
     const fb = fbMatch ? toChannel(fbMatch[1]) : detected[1];
     fallback = fb;
     primary = detected.find((c) => c !== fb) ?? primary;
@@ -527,8 +580,14 @@ export function analyzeBrief(text: string): BriefConfig {
   const ordered = fallback
     ? [primary, fallback]
     : [primary, ...detected.filter((c) => c !== primary)];
-  const fallbackWait = primary === "whatsapp" && fallback === "sms" ? "6 hours" : "1 day";
-  return { channels: ordered, primary, fallback, fallbackWait };
+  return {
+    channels: ordered,
+    primary,
+    fallback,
+    fallbackWait: "1 day",
+    ...(unavailable.length ? { unavailable } : {}),
+    ...(experiment ? { experiment: true } : {}),
+  };
 }
 
 /** Build a brief plan from confirmed channel config. Gaps surface in the Resolve card. */
@@ -541,7 +600,11 @@ export function planFromBrief(text: string, cfg: BriefConfig): BriefPlan {
   const line = channelsSummary(cfg);
   const assumptions = [
     ...(cfg.fallback ? [`Fallback wait defaulted to ${durationLabel(cfg.fallbackWait)}`] : []),
-    ...(isParallel ? [`${cfg.channels.map((c) => CHANNEL_META[c].label).join(" & ")} both target the full segment until you set a split rule`] : []),
+    ...(cfg.experiment
+      ? [`A/B test defaulted to a 50/50 split between ${cfg.channels.map((c) => CHANNEL_META[c].label).join(" & ")}`]
+      : isParallel
+        ? [`${cfg.channels.map((c) => CHANNEL_META[c].label).join(" & ")} both target the full segment until you set a split rule`]
+        : []),
     `Sending window ${TENANT_DEFAULTS.windowStart}–${TENANT_DEFAULTS.windowEnd} ${TENANT_DEFAULTS.timezone}`,
     `Frequency cap ${TENANT_DEFAULTS.freqCap}`,
   ];
@@ -597,31 +660,71 @@ export function applyResolved(plan: AskPiPlan, resolved: Record<string, string>)
 /**
  * Annotate a parallel (no-fallback) plan with the audience split rule. The
  * audience node carries the split summary; the priority channel (channels[0])
- * is the "≥ threshold" branch, the other the "below" branch. Same node IDs.
+ * gets the matching branch, the other gets the complement. A `numeric` attribute
+ * routes "≥ threshold" to the priority channel; a `categorical` attribute routes
+ * "= value" there. `value` is the threshold (numeric) or the chosen option
+ * (categorical). Same node IDs throughout.
  */
 export function applySplit(
   plan: AskPiPlan,
   attrId: string,
-  threshold: string,
+  value: string,
   channels: Channel[],
 ): AskPiPlan {
   const attr = findSplitAttribute(attrId);
-  if (!attr || !threshold) return plan;
+  if (!attr || !value) return plan;
   const priorityNode = channels[0] ? CHANNEL_NODE_ID[channels[0]] : null;
   const otherNode = channels[1] ? CHANNEL_NODE_ID[channels[1]] : null;
-  const cut = `${attr.label} ≥ ${attr.unit}${threshold}`;
+  const categorical = attr.type === "categorical";
+  const priorityCut = categorical ? `= ${value}` : `≥ ${attr.unit}${value}`;
+  const otherCut = categorical ? `≠ ${value}` : `< ${attr.unit}${value}`;
+  const cut = `${attr.label} ${priorityCut}`;
+  const stripBranch = / · (≥|<|=|≠).*$/;
   const nodes = plan.nodes.map((n) => {
     if (n.data.kind === "audience") {
       const base = (n.data.subtitle ?? "").replace(/ · Split:.*$/, "");
       return { ...n, data: { ...n.data, subtitle: `${base} · Split: ${cut}` } };
     }
     if (n.id === priorityNode) {
-      const base = (n.data.subtitle ?? "").replace(/ · (≥|<).*$/, "");
-      return { ...n, data: { ...n.data, subtitle: `${base} · ≥ ${attr.unit}${threshold}` } };
+      const base = (n.data.subtitle ?? "").replace(stripBranch, "");
+      return { ...n, data: { ...n.data, subtitle: `${base} · ${priorityCut}` } };
     }
     if (n.id === otherNode) {
-      const base = (n.data.subtitle ?? "").replace(/ · (≥|<).*$/, "");
-      return { ...n, data: { ...n.data, subtitle: `${base} · < ${attr.unit}${threshold}` } };
+      const base = (n.data.subtitle ?? "").replace(stripBranch, "");
+      return { ...n, data: { ...n.data, subtitle: `${base} · ${otherCut}` } };
+    }
+    return n;
+  });
+  return { ...plan, nodes };
+}
+
+/**
+ * Annotate a parallel plan as a channel A/B experiment: the audience node shows
+ * the random split (P% to the priority channel, the rest to the other) and each
+ * channel node carries its share. `pct` is the priority channel's percentage.
+ * Same node IDs as the parallel build.
+ */
+export function applyExperiment(plan: AskPiPlan, pct: string, channels: Channel[]): AskPiPlan {
+  const p = Math.max(0, Math.min(100, Number(pct)));
+  if (Number.isNaN(p)) return plan;
+  const other = 100 - p;
+  const priorityNode = channels[0] ? CHANNEL_NODE_ID[channels[0]] : null;
+  const otherNode = channels[1] ? CHANNEL_NODE_ID[channels[1]] : null;
+  const pLabel = channels[0] ? CHANNEL_META[channels[0]].label : "A";
+  const oLabel = channels[1] ? CHANNEL_META[channels[1]].label : "B";
+  const stripBranch = / · \d+%.*$/;
+  const nodes = plan.nodes.map((n) => {
+    if (n.data.kind === "audience") {
+      const base = (n.data.subtitle ?? "").replace(/ · A\/B:.*$/, "");
+      return { ...n, data: { ...n.data, subtitle: `${base} · A/B: ${p}% ${pLabel} / ${other}% ${oLabel}` } };
+    }
+    if (n.id === priorityNode) {
+      const base = (n.data.subtitle ?? "").replace(stripBranch, "");
+      return { ...n, data: { ...n.data, subtitle: `${base} · ${p}% of audience` } };
+    }
+    if (n.id === otherNode) {
+      const base = (n.data.subtitle ?? "").replace(stripBranch, "");
+      return { ...n, data: { ...n.data, subtitle: `${base} · ${other}% of audience` } };
     }
     return n;
   });
@@ -708,17 +811,6 @@ export function runChecks(
         );
       }
     }
-    if (ch === "sms") {
-      const sender = findSmsSender(resolved.smsSender);
-      checks.push(
-        !sender
-          ? { id: "sms_sender", label: "SMS sender header", status: "block", detail: "Select a registered DLT sender header." }
-          : { id: "sms_sender", label: "SMS sender header", status: "pass", detail: `${sender.senderId} · ${sender.label}.` },
-      );
-      if (sender) {
-        checks.push({ id: "sms_dlt", label: "SMS DLT registration", status: "pass", detail: `PE ID ${sender.peId} registered on TRAI DLT.` });
-      }
-    }
     if (ch === "voice") {
       const agent = findVoiceAgent(resolved.voiceAgent);
       checks.push(
@@ -754,20 +846,46 @@ export function runChecks(
     detail: channels.length >= 2 ? `${seqLabel} — distinct channels.` : `${seqLabel || "WhatsApp"} only — no fallback.`,
   });
 
-  // 4b. Audience split — required when the journey declares a split (parallel
-  // channels with no fallback). Needs an attribute + a numeric threshold.
+  // 4b. Channel A/B experiment — required when the journey declares a percentage
+  // split between the two channels. Needs a percentage in 1–99.
+  if (vars.some((v) => v.kind === "percent")) {
+    const raw = resolved.splitPct;
+    const p = Number(raw);
+    const priorityLabel = channels[0] ? CHANNEL_META[channels[0]].label : "channel A";
+    const otherLabel = channels[1] ? CHANNEL_META[channels[1]].label : "channel B";
+    checks.push(
+      !raw || Number.isNaN(p)
+        ? { id: "experiment", label: "A/B split", status: "block", detail: "Set the % of the audience for the priority channel." }
+        : p < 1 || p > 99
+          ? { id: "experiment", label: "A/B split", status: "block", detail: "Split must be between 1% and 99% so both arms get traffic." }
+          : { id: "experiment", label: "A/B split", status: "pass", detail: `${p}% → ${priorityLabel}; ${100 - p}% → ${otherLabel} (random).` },
+    );
+  }
+
+  // 4c. Audience split — required when the journey declares an attribute split
+  // (parallel channels, no fallback). Numeric attributes need a threshold;
+  // categorical attributes need a chosen value.
   if (vars.some((v) => v.kind === "splitAttribute")) {
     const attr = findSplitAttribute(resolved.splitAttribute);
-    const thr = resolved.splitThreshold;
     const priorityLabel = channels[0] ? CHANNEL_META[channels[0]].label : "priority channel";
     const otherLabel = channels[1] ? CHANNEL_META[channels[1]].label : "other channel";
-    checks.push(
-      !attr
-        ? { id: "split", label: "Audience split", status: "block", detail: "Pick an attribute to split the audience on." }
-        : !thr || Number.isNaN(Number(thr))
+    if (!attr) {
+      checks.push({ id: "split", label: "Audience split", status: "block", detail: "Pick an attribute to split the audience on." });
+    } else if (attr.type === "categorical") {
+      const val = resolved.splitValue;
+      checks.push(
+        !val
+          ? { id: "split", label: "Audience split", status: "block", detail: `Pick which ${attr.label.toLowerCase()} goes to the priority channel.` }
+          : { id: "split", label: "Audience split", status: "pass", detail: `${attr.label} = ${val} → ${priorityLabel}; everyone else → ${otherLabel}.` },
+      );
+    } else {
+      const thr = resolved.splitThreshold;
+      checks.push(
+        !thr || Number.isNaN(Number(thr))
           ? { id: "split", label: "Audience split", status: "block", detail: "Set a numeric threshold for the split." }
           : { id: "split", label: "Audience split", status: "pass", detail: `${attr.label} ≥ ${attr.unit}${thr} → ${priorityLabel}; below → ${otherLabel}.` },
-    );
+      );
+    }
   }
 
   // 5. Sending window respects India TRAI DND quiet hours (9pm–9am).
