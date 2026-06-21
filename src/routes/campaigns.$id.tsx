@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { createFileRoute, useNavigate, useBlocker } from "@tanstack/react-router";
 import { toast } from "sonner";
+import { CopilotKit } from "@copilotkit/react-core";
 import { WorkflowCanvas } from "@/components/workflow/WorkflowCanvas";
 import { BuilderTopBar } from "@/components/workflow/BuilderTopBar";
 import type { CampaignStatus } from "@/lib/campaign-types";
 import { EXAMPLE_CAMPAIGNS } from "@/lib/campaign-examples";
+import { COPILOT_ENDPOINT } from "@/lib/copilot/endpoint";
 
 export const Route = createFileRoute("/campaigns/$id")({
   component: CampaignBuilder,
@@ -100,18 +102,29 @@ function CampaignBuilder() {
         description={isNew ? seedDescription : undefined}
       />
       <div className="relative flex-1">
-        <WorkflowCanvas
-          status={status}
-          campaignId={id}
-          onValidityChange={handleValidity}
-          onDirty={handleDirty}
-          autoStartAskPi={isNew}
-          isNew={isNew}
-          onAiBuiltName={(n) => { setName(n); setDirty(true); }}
-          seedName={isNew ? seedName : undefined}
-          seedDescription={isNew ? seedDescription : undefined}
-          seedObjective={isNew ? seedObjective : undefined}
-        />
+        {(() => {
+          const canvas = (
+            <WorkflowCanvas
+              status={status}
+              campaignId={id}
+              onValidityChange={handleValidity}
+              onDirty={handleDirty}
+              autoStartAskPi={isNew}
+              isNew={isNew}
+              onAiBuiltName={(n) => { setName(n); setDirty(true); }}
+              seedName={isNew ? seedName : undefined}
+              seedDescription={isNew ? seedDescription : undefined}
+              seedObjective={isNew ? seedObjective : undefined}
+            />
+          );
+          // Ask Pi (and its CopilotKit runtime) is scoped to campaign creation
+          // only — once a campaign exists, the provider isn't mounted.
+          return isNew ? (
+            <CopilotKit runtimeUrl={COPILOT_ENDPOINT}>{canvas}</CopilotKit>
+          ) : (
+            canvas
+          );
+        })()}
       </div>
     </div>
   );

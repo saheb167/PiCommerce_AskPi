@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUp, Square, Check, Loader2, Sparkle, Sparkles, X } from "lucide-react";
+import { ArrowUp, Square, Loader2, Sparkle, Sparkles, X } from "lucide-react";
+import { useCopilotChat } from "@copilotkit/react-core";
+import { Role, TextMessage } from "@copilotkit/runtime-client-gql";
 import { cn } from "@/lib/utils";
 import type { AskPiPlan } from "./AskPiWizard";
 import { AskPiConversation, type ConversationPhase } from "./AskPiConversation";
@@ -43,6 +45,24 @@ export function AiComposer({
 }: AiComposerProps = {}) {
   const [state, setState] = useState<State>("collapsed");
   const [value, setValue] = useState("");
+  // Live chat round-trip to the CopilotKit runtime (Anthropic adapter, or the
+  // deterministic offline fallback when no ANTHROPIC_API_KEY is set). The
+  // provider is only mounted on /campaigns/new, which is the only place this
+  // composer renders, so the hook is always inside a CopilotKit provider.
+  // `useCopilotChat` is the open-source hook (no license key required);
+  // `appendMessage`/`visibleMessages` are its supported send/read surface.
+  const { appendMessage, visibleMessages } = useCopilotChat();
+  // Latest assistant reply to surface in the result panel. `visibleMessages` can
+  // be undefined before the chat context hydrates, so default it defensively.
+  let replyText = "";
+  const chatMessages = visibleMessages ?? [];
+  for (let i = chatMessages.length - 1; i >= 0; i--) {
+    const m = chatMessages[i];
+    if (m.isTextMessage() && m.role === Role.Assistant && (m.content?.length ?? 0) > 0) {
+      replyText = m.content;
+      break;
+    }
+  }
   const [wizardPhase, setWizardPhase] = useState<ConversationPhase>("intent");
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
   const [hasEngaged, setHasEngaged] = useState(false);
@@ -81,10 +101,17 @@ export function AiComposer({
     }
   }, [state, wizardPhase]);
 
-  const submit = () => {
-    if (!value.trim()) return;
+  const submit = async (override?: string) => {
+    const text = (override ?? value).trim();
+    if (!text) return;
+    setValue("");
     setState("thinking");
-    setTimeout(() => setState("result"), 2200);
+    try {
+      await appendMessage(new TextMessage({ content: text, role: Role.User }));
+    } catch {
+      // Surface a graceful result even if the runtime round-trip fails.
+    }
+    setState("result");
   };
 
   const reset = () => {
@@ -211,7 +238,7 @@ export function AiComposer({
           {/* Chat mode — result / thinking surface */}
           {!isWizard && expandedTall && (
             <div className="border-b border-border px-5 py-4 animate-fade-in">
-              {state === "thinking" ? <ThinkingTrace /> : <ResultPreview onAccept={reset} onDismiss={reset} />}
+              {state === "thinking" ? <ThinkingTrace /> : <ResultPreview reply={replyText} onDismiss={reset} />}
             </div>
           )}
 
@@ -242,7 +269,7 @@ export function AiComposer({
                       key={s}
                       onClick={() => {
                         setValue(s);
-                        setTimeout(submit, 50);
+                        void submit(s);
                       }}
                       className="truncate rounded-full border border-border px-2.5 py-1 text-[11.5px] text-muted-foreground transition-colors hover:border-ai/40 hover:text-foreground"
                     >
@@ -253,7 +280,7 @@ export function AiComposer({
               )}
 
               <button
-                onClick={state === "thinking" ? reset : submit}
+                onClick={() => (state === "thinking" ? reset() : void submit())}
                 disabled={!value.trim() && state !== "thinking"}
                 className={cn(
                   "flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-all",
@@ -278,57 +305,26 @@ export function AiComposer({
 }
 
 function ThinkingTrace() {
-  const steps = [
-    "Reading current graph (10 nodes, 10 edges)…",
-    "Identifying failure branch on WhatsApp send…",
-    "Proposing Voice AI Agent insertion…",
-  ];
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center gap-2 text-[12.5px] font-medium text-foreground">
-        <Loader2 className="h-3.5 w-3.5 animate-spin text-ai" />
-        Pi is working…
-      </div>
-      <ul className="space-y-1 pl-5">
-        {steps.map((s, i) => (
-          <li
-            key={s}
-            className="text-[12px] text-muted-foreground"
-            style={{ animation: `fadeIn 0.4s ease-out ${i * 0.5}s both` }}
-          >
-            • {s}
-          </li>
-        ))}
-      </ul>
+    <div className="flex items-center gap-2 text-[12.5px] font-medium text-foreground">
+      <Loader2 className="h-3.5 w-3.5 animate-spin text-ai" />
+      Pi is thinking…
     </div>
   );
 }
 
-function ResultPreview({ onAccept, onDismiss }: { onAccept: () => void; onDismiss: () => void }) {
+function ResultPreview({ reply, onDismiss }: { reply: string; onDismiss: () => void }) {
   return (
     <div className="space-y-2.5">
       <div className="flex items-start gap-2">
         <Sparkle className="mt-0.5 h-3.5 w-3.5 shrink-0 fill-ai text-ai" />
-        <p className="text-[13px] leading-relaxed text-foreground">
-          I'll add a <span className="font-medium text-ai">Voice AI Agent</span> after the WhatsApp
-          failure branch, then route accepted users back into the nurture loop.
+        <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground">
+          {reply || "Pi didn't return a response. Try again."}
         </p>
       </div>
-      <div className="rounded-lg border border-ai/30 bg-ai/5 px-2.5 py-2 font-mono text-[11px] text-foreground">
-        <span className="text-success">+ insert</span> Voice AI Agent · after node{" "}
-        <span className="text-muted-foreground">wa_send_1</span>
-        <br />
-        <span className="text-success">+ connect</span> edge wa_send_1.failed → voice_agent
-      </div>
-      <div className="flex items-center justify-end gap-1.5">
+      <div className="flex items-center justify-end">
         <button onClick={onDismiss} className="rounded-md px-2.5 py-1 text-[11.5px] text-muted-foreground hover:text-foreground">
-          Dismiss
-        </button>
-        <button
-          onClick={onAccept}
-          className="inline-flex items-center gap-1 rounded-md bg-foreground px-2.5 py-1 text-[11.5px] font-medium text-background"
-        >
-          <Check className="h-3 w-3" /> Apply changes
+          Close
         </button>
       </div>
     </div>
