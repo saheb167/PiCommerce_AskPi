@@ -57,7 +57,7 @@ function AgentBuilder() {
     setLanguages((langs) => (langs.includes(l) ? langs.filter((x) => x !== l) : [...langs, l]));
 
   return (
-    <AppShell bare showAskPi={false}>
+    <AppShell bare>
       <div className="flex h-full flex-col">
         <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
           <div className="flex items-center gap-2 text-sm">

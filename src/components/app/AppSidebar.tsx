@@ -1,6 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import {
-  LayoutDashboard, Megaphone, Bot, BarChart3, Plug, Settings, Command, Sparkles,
+  LayoutDashboard, Megaphone, Bot, BarChart3, Plug, Settings, Command,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -39,15 +39,6 @@ export function AppSidebar() {
         <div className="my-3 h-px bg-border" />
         <NavSection items={secondary} isActive={isActive} />
       </nav>
-
-      <div className="m-2 rounded-xl border border-border bg-secondary/40 p-3">
-        <div className="flex items-center gap-1.5 text-[11px] font-medium text-ai">
-          <Sparkles className="h-3 w-3" /> Ask Pi
-        </div>
-        <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
-          Press <kbd className="rounded border border-border bg-background px-1 font-mono text-[10px]">⌘ K</kbd> anywhere to summon Pi!
-        </p>
-      </div>
     </aside>
   );
 }

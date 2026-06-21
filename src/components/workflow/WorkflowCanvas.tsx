@@ -314,35 +314,39 @@ export function WorkflowCanvas({
         onDuplicate={() => selected && duplicateNode(selected.id)}
       />
 
-      <AiComposer
-        mode="wizard"
-        nudge={{ label: "Ask Pi to build your campaign", active: autoStartAskPi }}
-        autoOpenWizard={askPiOpen}
-        seedName={isNew ? seedName : undefined}
-        seedDescription={isNew ? seedDescription : undefined}
-        seedObjective={isNew ? seedObjective : undefined}
-        onBuildingChange={setAiBuilding}
-        onWizardSkeleton={(skel) => {
-          setSelected(null);
-          setNodes(skel.nodes);
-          setEdges(skel.edges);
-          refit();
-        }}
-        onWizardBuild={(plan) => {
-          setSelected(null);
-          setNodes(plan.nodes);
-          setEdges(plan.edges);
-          onAiBuiltName?.(plan.name);
-          onDirty?.();
-          refit();
-        }}
-        onSavedDraft={(v) => {
-          onDirty?.();
-          toast.success(`Saved as draft ${v}`, {
-            description: "Review on the canvas — launch is a separate step.",
-          });
-        }}
-      />
+      {/* Ask Pi is scoped to campaign creation only — once a campaign exists
+          (not new), the composer is no longer available. */}
+      {isNew && (
+        <AiComposer
+          mode="wizard"
+          nudge={{ label: "Ask Pi to build your campaign", active: autoStartAskPi }}
+          autoOpenWizard={askPiOpen}
+          seedName={seedName}
+          seedDescription={seedDescription}
+          seedObjective={seedObjective}
+          onBuildingChange={setAiBuilding}
+          onWizardSkeleton={(skel) => {
+            setSelected(null);
+            setNodes(skel.nodes);
+            setEdges(skel.edges);
+            refit();
+          }}
+          onWizardBuild={(plan) => {
+            setSelected(null);
+            setNodes(plan.nodes);
+            setEdges(plan.edges);
+            onAiBuiltName?.(plan.name);
+            onDirty?.();
+            refit();
+          }}
+          onSavedDraft={(v) => {
+            onDirty?.();
+            toast.success(`Saved as draft ${v}`, {
+              description: "Review on the canvas — launch is a separate step.",
+            });
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, PageHeader } from "@/components/app/AppShell";
 import { Button } from "@/components/ui/button";
-import { ArrowUpRight, Megaphone, Bot, Activity, Sparkles, Plus, CheckCircle2, AlertTriangle } from "lucide-react";
+import { ArrowUpRight, Megaphone, Bot, Activity, Plus, CheckCircle2, AlertTriangle } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   component: Dashboard,
@@ -20,14 +20,9 @@ function Dashboard() {
         title="Good morning, Aman"
         description="Here's what's Live across your workspace right now."
         actions={
-          <>
-            <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs">
-              <Sparkles className="h-3.5 w-3.5 text-ai" /> Ask Pi
-            </Button>
-            <Button size="sm" className="h-8 gap-1.5 text-xs" asChild>
-              <Link to="/campaigns"><Plus className="h-3.5 w-3.5" /> New campaign</Link>
-            </Button>
-          </>
+          <Button size="sm" className="h-8 gap-1.5 text-xs" asChild>
+            <Link to="/campaigns"><Plus className="h-3.5 w-3.5" /> New campaign</Link>
+          </Button>
         }
       />
 
