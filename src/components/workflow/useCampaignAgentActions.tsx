@@ -44,12 +44,13 @@ import {
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
 import {
-  SEGMENTS, WA_TEMPLATES, VOICE_AGENTS, CHANNEL_SAMPLE, CHANNEL_META,
+  SEGMENTS, WA_TEMPLATES, VOICE_AGENTS, PHONE_ATTRIBUTES, CHANNEL_SAMPLE, CHANNEL_META,
   SPLIT_ATTRIBUTES, TENANT_DEFAULTS, DEFAULT_SEND_WINDOW,
-  findSegment, findWaTemplate, findVoiceAgent, findSplitAttribute,
+  findSegment, findWaTemplate, findVoiceAgent, findSplitAttribute, phoneAttributeLabel,
   analyzeBrief, planFromBrief, channelsSummary,
   applyResolved as applyResolvedToPlan, applySplit, applyExperiment,
   buildConditionalChannels, conditionFieldsFor, CHANNEL_NODE_ID,
+  branchSeqToId, parseBranchSeq, routeSeqLabel,
   splitFieldsFor, experimentVars, validateResolved, resolveFromText,
   type TemplateVar, type BriefConfig, type Channel,
 } from "@/lib/tenant-registry";
@@ -140,13 +141,8 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
     if (cfg.conditional) {
       const attr = findSplitAttribute(resolved.conditionAttribute);
       if (!attr) return null;
-      const routeLabel = (id: string | undefined, fallback: string): string => {
-        if (id === "end") return "End";
-        const ch = (Object.keys(CHANNEL_NODE_ID) as Channel[]).find((c) => CHANNEL_NODE_ID[c] === id);
-        return ch ? CHANNEL_META[ch].label : fallback;
-      };
-      const matchTo = routeLabel(resolved.branchMatch, a);
-      const elseTo = routeLabel(resolved.branchElse, cfg.channels[1] ? b : "End");
+      const matchTo = routeSeqLabel(resolved.branchMatch, a);
+      const elseTo = routeSeqLabel(resolved.branchElse, cfg.channels[1] ? b : "End");
       if (attr.type === "categorical") {
         return resolved.conditionValue ? `Conditional branch — ${attr.label} = ${resolved.conditionValue} → ${matchTo}; everyone else → ${elseTo}` : null;
       }
@@ -183,6 +179,9 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
     const lead: string[] = [];
     const placement = placementAssumption(cfg, resolved);
     if (placement) lead.push(placement);
+    if (cfg.channels.some((c) => c === "whatsapp" || c === "voice")) {
+      lead.push(`Contact number — reaching contacts on the ${phoneAttributeLabel(resolved.phoneField)} field`);
+    }
     if (cfg.fallback) {
       const wait = resolved.fallbackWindow?.trim() || cfg.fallbackWait;
       lead.push(`Fallback wait — waits ${wait} after non-delivery before the fallback`);
@@ -406,7 +405,7 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
   useCopilotAction({
     name: "planCampaignFromBrief",
     description:
-      "Plan a campaign directly from a free-text brief (no template). Detects the channels, lays the draft on the canvas, and surfaces the inferred objective + tenant-default assumptions. Returns `needsConditional: true` when the brief frames a conditional branch (route the audience Match / Else on an attribute) — call setConditionalBranch next. Returns `needsPlacement: true` when the brief names two or more channels with no fallback — call setChannelPlacement next so the user chooses how to place them (fallback / parallel split / A-B test). Otherwise go straight to resolveBriefCampaign. Use this ONLY for a descriptive brief; a named template still goes through listCampaignTemplates.",
+      "Plan a campaign directly from a free-text brief (no template). Detects the channels, lays the draft on the canvas, and surfaces the inferred objective + tenant-default assumptions. Returns `needsConditional: true` when the brief frames a conditional branch (route the audience Match / Else on an attribute) — resolve the audience via resolveBriefCampaign FIRST, then call setConditionalBranch to define the split. Returns `needsPlacement: true` when the brief names two or more channels with no fallback — call setChannelPlacement next so the user chooses how to place them (fallback / parallel split / A-B test). Otherwise go straight to resolveBriefCampaign. Use this ONLY for a descriptive brief; a named template still goes through listCampaignTemplates.",
     // Silent plumbing step — its result is the draft on the canvas, not a chat
     // bubble. Render nothing so the chat shows cards, never a raw tool-call chip.
     render: () => <></>,
@@ -452,7 +451,7 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
         needsConditional,
         needsPlacement,
         message: needsConditional
-          ? "The brief frames a conditional branch (route the audience Match / Else on an attribute). Call setConditionalBranch so the user sets the rule and which channel each branch goes to, then resolve."
+          ? "The brief frames a conditional branch on an audience attribute. Call resolveBriefCampaign FIRST so the user picks the audience + resources, then setConditionalBranch to define the Match / Else split on that audience."
           : needsPlacement
             ? "Two channels with no fallback. Call setChannelPlacement so the user chooses how to place them (fallback / parallel split / A-B test)."
             : "Draft rendered on the canvas. Call resolveBriefCampaign so the user fills the open variables.",
@@ -526,7 +525,7 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
   useCopilotAction({
     name: "setConditionalBranch",
     description:
-      "Show the Conditional-branch card when a brief frames a Match / Else split on an audience attribute. The user picks the attribute (and the value or threshold that defines the Match branch) and which channel each branch routes to (or End). Rebuilds the canvas as a branch node with Match / Else outputs. Blocks until the user submits. Call after planCampaignFromBrief returns needsConditional, before resolveBriefCampaign.",
+      "Show the Conditional-branch card when a brief frames a Match / Else split on an audience attribute. The user picks the attribute (and the value or threshold that defines the Match branch) and which channel each branch routes to (or End). Rebuilds the canvas as a branch node with Match / Else outputs. Blocks until the user submits. Call AFTER resolveBriefCampaign (so the audience is already chosen and the split attribute is meaningful), before validateBriefCampaign.",
     parameters: [],
     renderAndWaitForResponse: ({ status, respond }) => {
       const cfg = cfgRef.current;
@@ -544,16 +543,18 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
           cfg={cfg}
           done={status === "complete"}
           onSubmit={(payload) => {
-            const channelOf = (id: string): Channel | null =>
-              (Object.keys(CHANNEL_NODE_ID) as Channel[]).find((c) => CHANNEL_NODE_ID[c] === id) ?? null;
-            const matchCh = channelOf(payload.branchMatch);
-            const elseCh = channelOf(payload.branchElse);
+            // Each branch can run a channel *sequence* (e.g. WhatsApp → Voice);
+            // the channels in play are the union of both arms, priority first.
+            const matchSeq = parseBranchSeq(payload.branchMatch) ?? [];
+            const elseSeq = parseBranchSeq(payload.branchElse) ?? [];
             const used: Channel[] = [];
-            if (matchCh) used.push(matchCh);
-            if (elseCh && !used.includes(elseCh)) used.push(elseCh);
+            for (const ch of [...matchSeq, ...elseSeq]) if (!used.includes(ch)) used.push(ch);
             const channels = used.length ? used : cfg.channels;
             const primary = channels[0];
-            const nextCfg: BriefConfig = { ...cfg, conditional: true, experiment: false, fallback: null, channels, primary };
+            const nextCfg: BriefConfig = {
+              ...cfg, conditional: true, experiment: false, fallback: null, channels, primary,
+              branchMatchSeq: matchSeq, branchElseSeq: elseSeq,
+            };
 
             const placement: Record<string, string> = {
               conditionAttribute: payload.attribute,
@@ -575,7 +576,7 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
             cb.onBuild?.(plan);
 
             respond?.(
-              `User set the conditional branch: ${channelsSummary(nextCfg)}. Now call resolveBriefCampaign so they fill the remaining open variables.`,
+              `User set the conditional branch: ${channelsSummary(nextCfg)}. Now call validateBriefCampaign before confirming.`,
             );
           }}
         />
@@ -588,7 +589,7 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
   useCopilotAction({
     name: "resolveBriefCampaign",
     description:
-      "Show the single Resolve card for a brief-planned campaign, listing ONLY its open variables (segment + each channel's resource + any fallback window + the sending window / frequency cap / start timing), each backed by a registry picker or default. Blocks until the user submits, then patches the canvas. Call after planCampaignFromBrief (and setChannelPlacement, if placement was needed).",
+      "Show the single Resolve card for a brief-planned campaign, listing ONLY its open variables (segment + each channel's resource + any fallback window + the sending window / frequency cap / start timing), each backed by a registry picker or default. Blocks until the user submits, then patches the canvas. Call after planCampaignFromBrief (and setChannelPlacement, if placement was needed). For a conditional brief, call this BEFORE setConditionalBranch so the audience is chosen first; this action then routes to setConditionalBranch.",
     parameters: [],
     renderAndWaitForResponse: ({ status, respond }) => {
       const plan = briefPlanRef.current;
@@ -613,8 +614,14 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
             const patched = annotatePlacement(applyResolvedToPlan(plan, merged), cfg, merged);
             briefPlanRef.current = patched;
             cb.onBuild?.(patched);
+            // A conditional brief configures the Match / Else split AFTER the
+            // audience is chosen here, so the split attribute is meaningful.
+            // Route to setConditionalBranch once, until the branch is defined.
+            const needsBranch = cfg.conditional && !merged.conditionAttribute;
             respond?.(
-              `User resolved: ${JSON.stringify(resolved)}. Now call validateBriefCampaign before confirming.`,
+              needsBranch
+                ? `User resolved: ${JSON.stringify(resolved)}. Now call setConditionalBranch so they define the Match / Else split on the chosen audience.`
+                : `User resolved: ${JSON.stringify(resolved)}. Now call validateBriefCampaign before confirming.`,
             );
           }}
         />
@@ -1097,7 +1104,7 @@ function ResolveCard({
   const [values, setValues] = useState<Record<string, string>>(() => {
     const seed: Record<string, string> = {};
     for (const v of vars) {
-      if ((v.kind === "duration" || v.kind === "window" || v.kind === "choice") && v.default) {
+      if ((v.kind === "duration" || v.kind === "window" || v.kind === "choice" || v.kind === "phoneField") && v.default) {
         seed[v.key] = v.default;
       }
     }
@@ -1211,6 +1218,21 @@ function ResolveField({
           <SelectContent>
             {v.options.map((o) => (
               <SelectItem key={o} value={o} className="text-[12.5px]">{o}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      ) : v.kind === "phoneField" ? (
+        <Select value={value || v.default} onValueChange={onChange}>
+          <SelectTrigger className="h-8 text-[12.5px]">
+            <SelectValue placeholder="Select…" />
+          </SelectTrigger>
+          <SelectContent>
+            {PHONE_ATTRIBUTES.map((p) => (
+              <SelectItem key={p.id} value={p.id} className="text-[12.5px]">
+                <span className="flex items-center gap-1.5">
+                  <Phone className="h-3 w-3 text-muted-foreground" /> {p.label}
+                </span>
+              </SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -1708,14 +1730,19 @@ function ConditionalCard({
   done: boolean;
   onSubmit: (payload: ConditionalPayload) => void;
 }) {
-  // Branch targets: any supported channel, or End (drop the branch).
+  // Branch targets: a single channel, an ordered two-channel sequence
+  // (e.g. WhatsApp → Voice), or End (drop the branch). Sequence routes let one
+  // arm chain channels — "WhatsApp followed by Voice for low-LTV customers".
+  const supported = ["whatsapp", "voice"] as Channel[];
   const channelOpts: { id: string; label: string }[] = [
-    ...(["whatsapp", "voice"] as Channel[]).map((c) => ({ id: CHANNEL_NODE_ID[c], label: CHANNEL_META[c].label })),
+    ...supported.map((c) => ({ id: CHANNEL_NODE_ID[c], label: CHANNEL_META[c].label })),
+    { id: `${CHANNEL_NODE_ID.whatsapp}>${CHANNEL_NODE_ID.voice}`, label: `${CHANNEL_META.whatsapp.label} → ${CHANNEL_META.voice.label}` },
+    { id: `${CHANNEL_NODE_ID.voice}>${CHANNEL_NODE_ID.whatsapp}`, label: `${CHANNEL_META.voice.label} → ${CHANNEL_META.whatsapp.label}` },
     { id: "end", label: "End (no message)" },
   ];
-  const defaultMatch = CHANNEL_NODE_ID[cfg.primary];
   const otherCh = cfg.channels.find((c) => c !== cfg.primary);
-  const defaultElse = otherCh ? CHANNEL_NODE_ID[otherCh] : "end";
+  const defaultMatch = branchSeqToId(cfg.branchMatchSeq, CHANNEL_NODE_ID[cfg.primary]);
+  const defaultElse = branchSeqToId(cfg.branchElseSeq, otherCh ? CHANNEL_NODE_ID[otherCh] : "end");
 
   const [attribute, setAttribute] = useState<string>("");
   const [value, setValue] = useState<string>("");

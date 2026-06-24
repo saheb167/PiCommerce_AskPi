@@ -64,6 +64,23 @@ export const VOICE_AGENTS: VoiceAgentRef[] = [
   { id: "a_winback", name: "Win-back Voice", type: "voice", status: "live" },
 ];
 
+/**
+ * Audience attributes that can supply the phone number WhatsApp + voice dial.
+ * Captured in the Resolve flow right after the segment: both channels need a
+ * mobile number, and a segment may carry more than one (primary mobile, a
+ * dedicated WhatsApp number, an alternate, a voice-only landline). `id`s follow
+ * the `contact.<field>` convention the audience node config already uses.
+ */
+export type PhoneAttribute = { id: string; label: string; hint: string };
+export const PHONE_ATTRIBUTES: PhoneAttribute[] = [
+  { id: "contact.phone", label: "Mobile number", hint: "Primary mobile — used for WhatsApp & voice" },
+  { id: "contact.whatsapp", label: "WhatsApp number", hint: "Dedicated WhatsApp number, if different" },
+  { id: "contact.alt_phone", label: "Alternate phone", hint: "Secondary contact number" },
+  { id: "contact.landline", label: "Landline", hint: "Voice only — not WhatsApp-capable" },
+];
+/** The default contact-number attribute the audience node carries until the user picks one. */
+export const DEFAULT_PHONE_FIELD = "contact.phone";
+
 export const TENANT_DEFAULTS: TenantDefaults = {
   windowStart: "10:00",
   windowEnd: "19:00",
@@ -80,6 +97,7 @@ export type TemplateVar =
   | { key: string; kind: "segment"; label: string; required?: boolean }
   | { key: string; kind: "waTemplate"; label: string; required?: boolean }
   | { key: string; kind: "voiceAgent"; label: string; required?: boolean }
+  | { key: string; kind: "phoneField"; label: string; default: string; required?: boolean }
   | { key: string; kind: "smsSender"; label: string; required?: boolean }
   | { key: string; kind: "duration"; label: string; default: string; required?: boolean }
   | { key: string; kind: "splitAttribute"; label: string; required?: boolean }
@@ -200,6 +218,10 @@ export const findSegment = (id?: string) => SEGMENTS.find((s) => s.id === id);
 export const findWaTemplate = (id?: string) => WA_TEMPLATES.find((t) => t.id === id);
 export const findSmsSender = (id?: string) => SMS_SENDERS.find((s) => s.id === id);
 export const findVoiceAgent = (id?: string) => VOICE_AGENTS.find((a) => a.id === id);
+export const findPhoneAttribute = (id?: string) => PHONE_ATTRIBUTES.find((p) => p.id === id);
+/** The human label for a contact-number attribute id, falling back to the default field's label. */
+export const phoneAttributeLabel = (id?: string) =>
+  (findPhoneAttribute(id) ?? findPhoneAttribute(DEFAULT_PHONE_FIELD))!.label;
 
 /** Parse "6 hours" / "3h" / "1 day" → { value, unit }. Falls back to 6 Hours. */
 export function parseDuration(raw: string): { value: number; unit: "Minutes" | "Hours" | "Days" } {
@@ -257,6 +279,17 @@ export function matchVoiceAgent(text: string): string | undefined {
   if (/reactivat/.test(t)) return "a_voice_react";
   if (/points|expir/.test(t)) return "a_points_voice";
   if (/win.?back/.test(t)) return "a_winback";
+  return undefined;
+}
+
+export function matchPhoneAttribute(text: string): string | undefined {
+  const t = (text || "").toLowerCase();
+  const exact = PHONE_ATTRIBUTES.find((p) => t.includes(p.id) || t.includes(p.label.toLowerCase()));
+  if (exact) return exact.id;
+  if (/whatsapp\s*(number|no\.?)|wa\s*number/.test(t)) return "contact.whatsapp";
+  if (/landline|land\s*line|home\s*phone/.test(t)) return "contact.landline";
+  if (/alt(ernate|\.)?\s*(phone|number|mobile)|secondary\s*(phone|number)/.test(t)) return "contact.alt_phone";
+  if (/mobile|phone|cell|msisdn|contact\s*number|primary\s*(phone|number|mobile)/.test(t)) return "contact.phone";
   return undefined;
 }
 
@@ -369,6 +402,11 @@ export function resolveFromText(
         if (id) values[v.key] = id;
         break;
       }
+      case "phoneField": {
+        const id = matchPhoneAttribute(t);
+        if (id) values[v.key] = id;
+        break;
+      }
       case "smsSender": {
         const s = SMS_SENDERS.find((x) => t.toLowerCase().includes(x.id) || t.toLowerCase().includes(x.senderId.toLowerCase()));
         if (s) values[v.key] = s.id;
@@ -456,6 +494,10 @@ export type BriefConfig = {
   experiment?: boolean;
   /** Marks a conditional-branch framing — the audience is routed down a Match / Else branch on an attribute. */
   conditional?: boolean;
+  /** Default channel sequence the Match (high-tier) branch runs, in order — e.g. [whatsapp] or [whatsapp, voice]. Inferred from the brief; the card can override. */
+  branchMatchSeq?: Channel[];
+  /** Default channel sequence the Else (low-tier) branch runs, in order — e.g. [whatsapp, voice] for "WhatsApp followed by voice". */
+  branchElseSeq?: Channel[];
   /** False when the brief named no channel (we defaulted to WhatsApp) — Pi then captures channels via a card. */
   channelsNamed?: boolean;
 };
@@ -479,10 +521,10 @@ const channelGap = (ch: Channel): TemplateVar => {
 };
 
 /** One journey node for a channel, configured from resolved values + tenant defaults. */
-function channelNode(ch: Channel, y: number, resolved: Record<string, string>): Node<WorkflowNodeData> {
+function channelNode(ch: Channel, y: number, resolved: Record<string, string>, id?: string): Node<WorkflowNodeData> {
   if (ch === "whatsapp") {
     const wa = findWaTemplate(resolved.waTemplate);
-    return { id: "wa", type: "workflow", position: { x: 0, y },
+    return { id: id ?? "wa", type: "workflow", position: { x: 0, y },
       data: { kind: "whatsapp", title: "WhatsApp message",
         subtitle: wa ? `Template: ${wa.label}` : "Pick template",
         valid: !!wa, error: wa ? undefined : "Pick template",
@@ -491,7 +533,7 @@ function channelNode(ch: Channel, y: number, resolved: Record<string, string>): 
           waVarMap: [{ v: "{{1}}", def: "contact.first_name" }, { v: "{{2}}", def: "payload.order_id" }] } } };
   }
   const agent = findVoiceAgent(resolved.voiceAgent);
-  return { id: "voice", type: "workflow", position: { x: 0, y },
+  return { id: id ?? "voice", type: "workflow", position: { x: 0, y },
     data: { kind: "voiceCall", title: "Voice call",
       subtitle: agent ? `Agent: ${agent.name}` : "Select voice agent",
       valid: !!agent, error: agent ? undefined : "Select agent",
@@ -499,6 +541,18 @@ function channelNode(ch: Channel, y: number, resolved: Record<string, string>): 
         callEnd: TENANT_DEFAULTS.windowEnd, timezone: TENANT_DEFAULTS.timezone,
         maxAttempts: 3, retryInterval: "1 hour",
         voiceVarMap: [{ v: "{{name}}", def: "contact.first_name" }] } } };
+}
+
+/**
+ * The audience node's subtitle: the chosen segment + its size, plus the contact
+ * attribute WhatsApp & voice dial (defaulted to the primary mobile until the
+ * user picks one on the Resolve card). "Select segment" until a segment is set.
+ * Shared by every builder + applyResolved so the canvas reads the same.
+ */
+export function audienceSubtitle(resolved: Record<string, string>): string {
+  const seg = findSegment(resolved.segment);
+  if (!seg) return "Select segment";
+  return `${seg.label} · ${seg.size} · Phone: ${phoneAttributeLabel(resolved.phoneField)}`;
 }
 
 /**
@@ -514,9 +568,9 @@ function buildFromChannels(name: string, cfg: BriefConfig, resolved: Record<stri
       data: { kind: "start", title: "Start", locked: true, valid: true } },
     { id: "audience", type: "workflow", position: { x: 0, y: 120 },
       data: { kind: "audience", title: "Audience",
-        subtitle: seg ? `${seg.label} · ${seg.size}` : "Select segment",
+        subtitle: audienceSubtitle(resolved),
         valid: !!seg, error: seg ? undefined : "Select segment",
-        config: { audienceMode: "api", phoneField: "contact.phone" } } },
+        config: { audienceMode: "api", phoneField: resolved.phoneField ?? DEFAULT_PHONE_FIELD } } },
   ];
   let y = 240;
   nodes.push(channelNode(cfg.primary, y, resolved));
@@ -542,6 +596,46 @@ function buildFromChannels(name: string, cfg: BriefConfig, resolved: Record<stri
 export const CHANNEL_NODE_ID: Record<Channel, string> = { whatsapp: "wa", voice: "voice" };
 
 /**
+ * A conditional branch can run a *sequence* of channels (e.g. "WhatsApp then
+ * Voice"). A branch route value is encoded as `>`-joined channel node ids
+ * ("wa", "wa>voice", "voice>wa") or "end" for "no message". These helpers
+ * convert between the encoded string and an ordered `Channel[]`.
+ */
+const CH_BY_NODE_ID = (id: string): Channel | undefined =>
+  (Object.keys(CHANNEL_NODE_ID) as Channel[]).find((c) => CHANNEL_NODE_ID[c] === id);
+
+/** Encode an ordered channel sequence as a route value, falling back when empty/undefined. */
+export function branchSeqToId(seq: Channel[] | undefined, fallback: string): string {
+  if (!seq || seq.length === 0) return fallback;
+  return seq.map((c) => CHANNEL_NODE_ID[c]).join(">");
+}
+
+/**
+ * Decode a route value into an ordered, de-duplicated channel sequence.
+ * Returns `undefined` for an absent/blank value (caller falls back to a default),
+ * and `[]` for an explicit "end" (drop the branch — no message).
+ */
+export function parseBranchSeq(val: string | undefined): Channel[] | undefined {
+  if (val == null || val.trim() === "") return undefined;
+  if (val === "end") return [];
+  const out: Channel[] = [];
+  for (const part of val.split(">")) {
+    const ch = CH_BY_NODE_ID(part.trim());
+    if (ch && !out.includes(ch)) out.push(ch);
+  }
+  return out;
+}
+
+/** Human label for a branch route value — "WhatsApp", "WhatsApp → Voice", or "End". */
+export function routeSeqLabel(val: string | undefined, fallback: string): string {
+  if (val === "end") return "End";
+  const seq = parseBranchSeq(val);
+  if (seq === undefined) return fallback;
+  if (seq.length === 0) return "End";
+  return seq.map((c) => CHANNEL_META[c].label).join(" → ");
+}
+
+/**
  * Parallel journey for multiple channels with NO fallback: audience fans out
  * directly to each channel node (side by side), each channel ends. Used when a
  * brief names several channels but no fallback — the audience is split between
@@ -554,9 +648,9 @@ function buildParallelChannels(name: string, cfg: BriefConfig, resolved: Record<
       data: { kind: "start", title: "Start", locked: true, valid: true } },
     { id: "audience", type: "workflow", position: { x: 0, y: 120 },
       data: { kind: "audience", title: "Audience",
-        subtitle: seg ? `${seg.label} · ${seg.size}` : "Select segment",
+        subtitle: audienceSubtitle(resolved),
         valid: !!seg, error: seg ? undefined : "Select segment",
-        config: { audienceMode: "api", phoneField: "contact.phone" } } },
+        config: { audienceMode: "api", phoneField: resolved.phoneField ?? DEFAULT_PHONE_FIELD } } },
   ];
   let x = -180;
   const channelIds: string[] = [];
@@ -583,13 +677,18 @@ export const CONDITION_NODE_ID = "branch";
 
 /**
  * Conditional journey: start → audience → a conditional branch node whose two
- * labeled outputs (Match / Else) route — via `sourceHandle` edges — to a channel
- * node or straight to End. Match defaults to the primary channel, Else to the
- * other channel (or End when only one channel is in play); the resolve card can
- * override both. The branch node's subtitle states the rule (attribute ≥ value /
+ * labeled outputs (Match / Else) each route — via a `sourceHandle` edge — to an
+ * ordered *sequence* of channel nodes (or straight to End). A branch can chain
+ * channels: e.g. "WhatsApp followed by Voice" runs wa → voice on that arm. Match
+ * defaults to the primary channel, Else to the other channel (or End when only
+ * one channel is in play); the resolve card can override both arms with any
+ * sequence. The branch node's subtitle states the rule (attribute ≥ value /
  * = value); routing is read from `resolved.branchMatch` / `resolved.branchElse`
- * (a channel node id or "end"). A channel node is built only when the routing
- * actually targets it. Stable node ids (audience / branch / wa / voice / end).
+ * (a `>`-joined channel-id sequence, or "end"), falling back to
+ * `cfg.branchMatchSeq` / `cfg.branchElseSeq` inferred from the brief. Each arm
+ * gets its own collision-free node ids (Match arm prefixed `m_`, Else arm `e_`)
+ * so the same channel can appear on both arms. Stable ids (audience / branch /
+ * m_* / e_* / end).
  */
 export function buildConditionalChannels(
   name: string,
@@ -606,19 +705,22 @@ export function buildConditionalChannels(
       : `${attr.label} ≥ ${attr.unit}${resolved.conditionThreshold ?? "…"}`
     : "Set the branch rule";
 
-  // Routing targets — default Match→primary, Else→other channel (or End).
+  // Each arm runs an ordered channel sequence. Resolve-card routing wins; else
+  // the brief-inferred sequence; else Match→primary, Else→other channel (or End).
   const elseDefaultCh = cfg.channels.find((c) => c !== cfg.primary);
-  const matchTarget = resolved.branchMatch || CHANNEL_NODE_ID[cfg.primary];
-  const elseTarget = resolved.branchElse || (elseDefaultCh ? CHANNEL_NODE_ID[elseDefaultCh] : "end");
+  const matchSeq =
+    parseBranchSeq(resolved.branchMatch) ?? cfg.branchMatchSeq ?? [cfg.primary];
+  const elseSeq =
+    parseBranchSeq(resolved.branchElse) ?? cfg.branchElseSeq ?? (elseDefaultCh ? [elseDefaultCh] : []);
 
   const nodes: Node<WorkflowNodeData>[] = [
     { id: "start", type: "workflow", position: { x: 0, y: 0 },
       data: { kind: "start", title: "Start", locked: true, valid: true } },
     { id: "audience", type: "workflow", position: { x: 0, y: 120 },
       data: { kind: "audience", title: "Audience",
-        subtitle: seg ? `${seg.label} · ${seg.size}` : "Select segment",
+        subtitle: audienceSubtitle(resolved),
         valid: !!seg, error: seg ? undefined : "Select segment",
-        config: { audienceMode: "api", phoneField: "contact.phone" } } },
+        config: { audienceMode: "api", phoneField: resolved.phoneField ?? DEFAULT_PHONE_FIELD } } },
     { id: CONDITION_NODE_ID, type: "workflow", position: { x: 0, y: 240 },
       data: { kind: "conditional", title: "Conditional branch",
         subtitle: matchCut,
@@ -630,35 +732,61 @@ export function buildConditionalChannels(
         ] } },
   ];
 
-  // A channel node is built only when routing actually targets it.
-  const usedChannels = cfg.channels.filter(
-    (ch) => matchTarget === CHANNEL_NODE_ID[ch] || elseTarget === CHANNEL_NODE_ID[ch],
-  );
-  let x = -180;
-  for (const ch of usedChannels) {
-    const node = channelNode(ch, 380, resolved);
-    node.position = { x, y: 380 };
-    nodes.push(node);
-    x += 360;
-  }
-  nodes.push({ id: "end", type: "workflow", position: { x: 0, y: 520 },
+  // Build each arm as a chain of channel nodes with arm-prefixed ids so the same
+  // channel (e.g. WhatsApp) can appear on both Match and Else without colliding.
+  const armNodes = (prefix: "m" | "e", seq: Channel[], x: number): Node<WorkflowNodeData>[] => {
+    const out: Node<WorkflowNodeData>[] = [];
+    let y = 380;
+    for (const ch of seq) {
+      const node = channelNode(ch, y, resolved, `${prefix}_${CHANNEL_NODE_ID[ch]}`);
+      node.position = { x, y };
+      out.push(node);
+      y += 120;
+    }
+    return out;
+  };
+  const matchNodes = armNodes("m", matchSeq, -200);
+  const elseNodes = armNodes("e", elseSeq, 200);
+  nodes.push(...matchNodes, ...elseNodes);
+
+  const maxLen = Math.max(matchSeq.length, elseSeq.length);
+  const endY = 380 + Math.max(maxLen, 1) * 120 + 20;
+  nodes.push({ id: "end", type: "workflow", position: { x: 0, y: endY },
     data: { kind: "end", title: "End", locked: true, valid: true } });
+
+  // Chain a branch arm: branch -[handle]-> first → … → last → end (or branch→end when empty).
+  const armEdges = (arm: Node<WorkflowNodeData>[], handle: "match" | "else"): Edge[] => {
+    const first = arm[0]?.id ?? "end";
+    const es: Edge[] = [
+      { id: `e_branch_${handle}_${first}`, source: CONDITION_NODE_ID, sourceHandle: handle, target: first },
+    ];
+    for (let i = 0; i < arm.length; i++) {
+      const next = arm[i + 1]?.id ?? "end";
+      es.push({ id: `e_${arm[i].id}_${next}`, source: arm[i].id, target: next });
+    }
+    return es;
+  };
 
   const edges: Edge[] = [
     { id: "e_start_audience", source: "start", target: "audience" },
     { id: "e_audience_branch", source: "audience", target: CONDITION_NODE_ID },
-    { id: `e_branch_match_${matchTarget}`, source: CONDITION_NODE_ID, sourceHandle: "match", target: matchTarget },
-    { id: `e_branch_else_${elseTarget}`, source: CONDITION_NODE_ID, sourceHandle: "else", target: elseTarget },
-    ...usedChannels.map((ch) => ({ id: `e_${CHANNEL_NODE_ID[ch]}_end`, source: CHANNEL_NODE_ID[ch], target: "end" })),
+    ...armEdges(matchNodes, "match"),
+    ...armEdges(elseNodes, "else"),
   ];
   return { nodes, edges, name };
 }
 
-/** Open variables implied by a channel config: segment + each channel's resource + fallback window. */
+/** Open variables implied by a channel config: segment + contact-number field + each channel's resource + fallback window. */
 function channelOpenVars(cfg: BriefConfig): TemplateVar[] {
   const vars: TemplateVar[] = [
     { key: "segment", kind: "segment", label: "Audience segment", required: true },
   ];
+  // Right after the audience: which attribute supplies the phone number both
+  // WhatsApp and voice dial. Defaulted to the primary mobile (surfaced as an
+  // assumption), editable on the Resolve card.
+  if (cfg.channels.some((c) => c === "whatsapp" || c === "voice")) {
+    vars.push({ key: "phoneField", kind: "phoneField", label: "Contact number field", default: DEFAULT_PHONE_FIELD, required: false });
+  }
   const seen = new Set<string>();
   for (const ch of cfg.channels) {
     const gap = channelGap(ch);
@@ -677,7 +805,13 @@ export function channelsSummary(cfg: BriefConfig): string {
   const p = CHANNEL_META[cfg.primary].label;
   if (cfg.conditional) {
     const other = cfg.channels.find((c) => c !== cfg.primary);
-    return `Conditional branch — Match → ${p}; Else → ${other ? CHANNEL_META[other].label : "End"} (routed on an audience attribute)`;
+    const matchLabel = cfg.branchMatchSeq?.length
+      ? cfg.branchMatchSeq.map((c) => CHANNEL_META[c].label).join(" → ")
+      : p;
+    const elseLabel = cfg.branchElseSeq?.length
+      ? cfg.branchElseSeq.map((c) => CHANNEL_META[c].label).join(" → ")
+      : other ? CHANNEL_META[other].label : "End";
+    return `Conditional branch — Match → ${matchLabel}; Else → ${elseLabel} (routed on an audience attribute)`;
   }
   if (cfg.experiment && cfg.channels.length > 1) {
     return `A/B test — ${cfg.channels.map((c) => CHANNEL_META[c].label).join(" vs ")} on a split audience`;
@@ -724,9 +858,9 @@ function pointsExpiryTemplateBuild(resolved: Record<string, string>): AskPiPlan 
     { id: "audience", type: "workflow", position: { x: 0, y: 120 },
       data: {
         kind: "audience", title: "Audience",
-        subtitle: seg ? `${seg.label} · ${seg.size}` : "Select segment",
+        subtitle: audienceSubtitle(resolved),
         valid: !!seg, error: seg ? undefined : "Select segment",
-        config: { audienceMode: "api", phoneField: "contact.phone" },
+        config: { audienceMode: "api", phoneField: resolved.phoneField ?? DEFAULT_PHONE_FIELD },
       } },
     { id: "wa", type: "workflow", position: { x: 0, y: 240 },
       data: {
@@ -904,9 +1038,66 @@ export function analyzeBrief(text: string): BriefConfig {
   // attribute ("if VIP send …", "based on tier", "high-value customers get …"). Distinct
   // from a fallback (which keys on NON-DELIVERY): a conditional keys on an audience
   // attribute. Mutually exclusive with an A/B experiment.
+  //
+  // Also conditional when the brief splits the audience by an attribute and gives each
+  // tier a DIFFERENT treatment — e.g. "split by LTV, high-value get WhatsApp, low-value
+  // get WhatsApp then voice". This is distinct from a generic parallel split (one
+  // treatment per slice): the differential routing per attribute tier is what makes it a
+  // Match / Else branch. Detected conservatively via either (a) a high-tier AND a
+  // low-tier descriptor both present, or (b) a "split <audience> by/basis <attribute>"
+  // phrase paired with a per-segment "for <tier>" — neither fires on a plain
+  // "send both channels to everyone" parallel brief.
+  const tier = "(ltv|value|potential|spend(?:er|ing)?|tier|worth|priority|engag\\w*|loyal\\w*|customers?|merchants?|members?|users?|accounts?|shoppers?)";
+  const highLowDifferential =
+    new RegExp(`\\b(high|top|premium|vip|elite|gold|platinum|big|large)[\\s-]?${tier}\\b`).test(t) &&
+    new RegExp(`\\b(low|bottom|basic|standard|regular|small|budget)[\\s-]?${tier}\\b`).test(t);
+  const splitByAttribute =
+    /\bsplit[^.]{0,40}\b(audience|customers?|merchants?|members?|users?|base|list|segment)\b[^.]{0,24}\b(by|basis|based on|on the basis|depending on|per)\b/.test(t) &&
+    /\bfor\s+(high|low|top|bottom|premium|vip|elite|gold|platinum|loyal|new|existing|big|small)\b/.test(t);
   const conditional =
     !experiment &&
-    /\bbased on\b|\bdepending on\b|\bconditional\b|\bbranch\b|\botherwise\b|\belse\s+(?:send|use|route|get|reach|go)|\bif\b[^.]*\b(vip|high.?value|high.?spend|big.?spend|top.?tier|premium|elite|gold|platinum|loyal|tier|spent|spend|over|above|more than|greater|under|below|less than|cart|order|points|engag)\b/.test(t);
+    (/\bbased on\b|\bdepending on\b|\bconditional\b|\bbranch\b|\botherwise\b|\belse\s+(?:send|use|route|get|reach|go)|\bif\b[^.]*\b(vip|high.?value|high.?spend|big.?spend|top.?tier|premium|elite|gold|platinum|loyal|tier|spent|spend|over|above|more than|greater|under|below|less than|cart|order|points|engag)\b/.test(t) ||
+      highLowDifferential ||
+      splitByAttribute);
+
+  // Per-branch channel sequences for a *differential* conditional — e.g. "WhatsApp
+  // for high LTV, WhatsApp then Voice for low LTV". Split the brief into clauses
+  // and, for the clause naming a high-tier / low-tier audience, read the channels
+  // in the order they appear (honouring "followed by" / "then"). Match arm = high
+  // tier (≥ threshold); Else arm = low tier. Conservative: a sequence is only set
+  // when a clause names BOTH a tier and at least one channel.
+  let branchMatchSeq: Channel[] | undefined;
+  let branchElseSeq: Channel[] | undefined;
+  if (conditional) {
+    const seqFromClause = (clause: string): Channel[] => {
+      const items: { ch: Channel; idx: number }[] = [];
+      const wi = clause.search(/whats\s?app|\bwa\b/);
+      const vi = clause.search(/voice|\bcall\b|calling|phone\b|ivr/);
+      if (wi >= 0) items.push({ ch: "whatsapp", idx: wi });
+      if (vi >= 0) items.push({ ch: "voice", idx: vi });
+      items.sort((a, b) => a.idx - b.idx);
+      const seq: Channel[] = [];
+      for (const it of items) if (!seq.includes(it.ch)) seq.push(it.ch);
+      return seq;
+    };
+    const HIGH = /\b(high|top|premium|vip|elite|gold|platinum|big|large)\b/;
+    const LOW = /\b(low|bottom|basic|standard|regular|small|budget)\b/;
+    const clauses = t.split(/\band\b|[,;.]/).map((s) => s.trim()).filter(Boolean);
+    const hi = clauses.find((c) => HIGH.test(c) && /whats|voice|call|phone|ivr/.test(c));
+    const lo = clauses.find((c) => LOW.test(c) && /whats|voice|call|phone|ivr/.test(c));
+    const hiSeq = hi ? seqFromClause(hi) : [];
+    const loSeq = lo ? seqFromClause(lo) : [];
+    // Any channel named only inside a branch clause still needs to be "in play".
+    for (const ch of [...hiSeq, ...loSeq]) if (!detected.includes(ch)) detected.push(ch);
+    // When only one arm is spelled out ("VIP get a voice call" with no explicit
+    // else channel), the other arm takes the complement — the detected channels
+    // not already on the named arm — so routing stays symmetric and sensible.
+    if (hiSeq.length || loSeq.length) {
+      const complement = (seq: Channel[]): Channel[] => detected.filter((c) => !seq.includes(c));
+      branchMatchSeq = hiSeq.length ? hiSeq : complement(loSeq);
+      branchElseSeq = loSeq.length ? loSeq : complement(hiSeq);
+    }
+  }
 
   if (detected.length === 0) detected.push("whatsapp");
   // An experiment needs two arms — add the other channel if only one was named.
@@ -945,6 +1136,8 @@ export function analyzeBrief(text: string): BriefConfig {
     ...(unavailable.length ? { unavailable } : {}),
     ...(experiment ? { experiment: true } : {}),
     ...(conditional ? { conditional: true } : {}),
+    ...(branchMatchSeq ? { branchMatchSeq } : {}),
+    ...(branchElseSeq ? { branchElseSeq } : {}),
   };
 }
 
@@ -962,7 +1155,7 @@ export function planFromBrief(text: string, cfg: BriefConfig): BriefPlan {
   const assumptions = [
     ...(cfg.fallback ? [`Fallback wait defaulted to ${durationLabel(cfg.fallbackWait)}`] : []),
     ...(cfg.conditional
-      ? [`Match branch defaults to ${CHANNEL_META[cfg.primary].label}; Else to ${condElse ? CHANNEL_META[condElse].label : "End"} until you set the branch rule`]
+      ? [`Match branch defaults to ${cfg.branchMatchSeq?.length ? cfg.branchMatchSeq.map((c) => CHANNEL_META[c].label).join(" → ") : CHANNEL_META[cfg.primary].label}; Else to ${cfg.branchElseSeq?.length ? cfg.branchElseSeq.map((c) => CHANNEL_META[c].label).join(" → ") : condElse ? CHANNEL_META[condElse].label : "End"} until you set the branch rule`]
       : cfg.experiment
         ? [`A/B test defaulted to a 50/50 split between ${cfg.channels.map((c) => CHANNEL_META[c].label).join(" & ")}`]
         : isParallel
@@ -997,7 +1190,11 @@ export function applyResolved(plan: AskPiPlan, resolved: Record<string, string>)
   const nodes = plan.nodes.map((n) => {
     const d = n.data;
     if (seg && d.kind === "audience") {
-      return { ...n, data: { ...d, subtitle: `${seg.label} · ${seg.size}`, valid: true, error: undefined } };
+      const phoneId = resolved.phoneField ?? (d.config?.phoneField as string | undefined) ?? DEFAULT_PHONE_FIELD;
+      return { ...n, data: { ...d,
+        subtitle: audienceSubtitle({ ...resolved, segment: seg.id, phoneField: phoneId }),
+        valid: true, error: undefined,
+        config: { ...d.config, phoneField: phoneId } } };
     }
     if (wa && d.kind === "whatsapp") {
       return { ...n, data: { ...d, subtitle: `Template: ${wa.label}`, valid: true, error: undefined,
@@ -1161,6 +1358,18 @@ export function runChecks(
       : { id: "segment", label: "Audience segment", status: "pass", detail: seg ? `${seg.label} · ${seg.size} contacts` : "Segment selected." },
   );
 
+  // 1b. Contact number field — which audience attribute supplies the phone number
+  // WhatsApp + voice dial. Always present for these channels; defaults to the
+  // primary mobile, so this reports the mapping rather than blocking.
+  if (channels.some((c) => c === "whatsapp" || c === "voice")) {
+    const phone = findPhoneAttribute(resolved.phoneField ?? DEFAULT_PHONE_FIELD);
+    checks.push(
+      phone?.id === "contact.landline" && channels.includes("whatsapp")
+        ? { id: "phone_field", label: "Contact number field", status: "warn", detail: `${phone.label} is voice-only — WhatsApp can't reach a landline.` }
+        : { id: "phone_field", label: "Contact number field", status: "pass", detail: `${phone?.label ?? "Mobile number"} — used to reach contacts on WhatsApp & voice.` },
+    );
+  }
+
   // 2. Per-channel resource binding + channel compliance.
   for (const ch of channels) {
     if (ch === "whatsapp") {
@@ -1263,14 +1472,9 @@ export function runChecks(
   // (a channel or End) is reported for confirmation.
   if (vars.some((v) => v.key === "conditionAttribute")) {
     const attr = findSplitAttribute(resolved.conditionAttribute);
-    const routeLabel = (id: string | undefined, fallback: string): string => {
-      if (id === "end") return "End";
-      const ch = (Object.keys(CHANNEL_NODE_ID) as Channel[]).find((c) => CHANNEL_NODE_ID[c] === id);
-      return ch ? CHANNEL_META[ch].label : fallback;
-    };
     const otherCh = channels.find((c) => c !== channels[0]);
-    const matchTo = routeLabel(resolved.branchMatch, channels[0] ? CHANNEL_META[channels[0]].label : "Match branch");
-    const elseTo = routeLabel(resolved.branchElse, otherCh ? CHANNEL_META[otherCh].label : "End");
+    const matchTo = routeSeqLabel(resolved.branchMatch, channels[0] ? CHANNEL_META[channels[0]].label : "Match branch");
+    const elseTo = routeSeqLabel(resolved.branchElse, otherCh ? CHANNEL_META[otherCh].label : "End");
     if (!attr) {
       checks.push({ id: "condition", label: "Conditional branch", status: "block", detail: "Pick an attribute to branch the audience on." });
     } else if (attr.type === "categorical") {
