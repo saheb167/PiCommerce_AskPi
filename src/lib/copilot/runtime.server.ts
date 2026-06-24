@@ -30,10 +30,33 @@ import { AbstractAgent } from "@ag-ui/client";
 import { EventType, type BaseEvent, type RunAgentInput } from "@ag-ui/core";
 import { Observable } from "rxjs";
 
-import { COPILOT_ENDPOINT } from "./endpoint";
+import { COPILOT_ENDPOINT, PI_PROMPT_MARKER, PI_PROMPT_END } from "./endpoint";
 
 /** Default model when no override is supplied. Overridable via `PI_AGENT_MODEL`. */
-const DEFAULT_MODEL = "claude-3-5-sonnet-latest";
+const DEFAULT_MODEL = "claude-sonnet-4-5";
+
+/**
+ * The agent's system prompt. CopilotKit 1.61's AG-UI transport does NOT forward
+ * the React `<CopilotChat instructions>` prop to the model (the `agent/run`
+ * payload carries only the user/assistant turns), so the only reliable place to
+ * steer the model is here — injected server-side as the leading `system` message
+ * on each run (see {@link withSystemPrompt}).
+ */
+const PI_SYSTEM_PROMPT = [
+  "You are Pi, the campaign-creation copilot for a marketing platform.",
+  "STYLE — be concise AND conversational: reply in at most ONE short sentence (≤14 words). Talk WITH the user; don't go silent, but don't restate detail the cards already show.",
+  "Banned openers: 'I'll help you…', 'Let me…', 'Sure,…', 'Great,…'. Skip filler — lead with substance.",
+  "FIRST, always reply with ONE short line restating the goal you understood in your own words (e.g. 'Winning back lapsed members over WhatsApp and voice.'). You MAY echo channels the user explicitly named; never invent channels they did not state.",
+  "ALWAYS START WITH THE TEMPLATE CARD: on the user's first brief, immediately call listCampaignTemplates with their brief verbatim as `query` so the matching approved templates render as tiles — do this for BOTH a named template and a plain-language brief. NEVER call planCampaignFromBrief before the template card has been shown.",
+  "SHOW THE TEMPLATE CARD EXACTLY ONCE PER SESSION — only on that first brief. After it has been shown, NEVER call listCampaignTemplates again: treat any later message that describes a campaign as a brief and go to PATH B (planCampaignFromBrief with that message as `brief`), even if no draft exists yet and even if the message names a template. The user already saw the tiles once; a typed description means build-from-brief, not re-pick.",
+  "PATH A — USER PICKS A TEMPLATE (clicks a tile, or names a template id/name directly): create it FROM THAT TEMPLATE by calling these actions strictly IN ORDER: 1) instantiateCampaignTemplate with the chosen id — renders the draft, returns open variables + assumptions. 2) resolveCampaign — Resolve card. 3) validateCampaign — the compliance gate; on 'block' call resolveCampaign again, on 'warn' keep the warning text. 4) confirmCampaign (pass the warning, if any). Do NOT launch.",
+  "PATH B — USER DESCRIBES INSTEAD OF PICKING (they type a plain-language brief, or say none of the tiles fit): plan it DIRECTLY from the brief. Call these actions strictly IN ORDER: 1) planCampaignFromBrief — pass the user's brief verbatim as `brief`; it renders the draft and returns `needsChannels` / `needsConditional` / `needsPlacement`. 1b) If `needsChannels` is true (the brief named no channel), call setCampaignChannels so the user picks the channel(s), priority and any fallback, THEN continue. 1c) If `needsConditional` is true (the brief frames a Match / Else branch on an audience attribute), call setConditionalBranch so the user sets the rule and which channel each branch routes to, THEN skip to step 3. 2) If `needsPlacement` is true (two or more channels with no fallback), call setChannelPlacement so the user chooses how the channels are placed (fallback / parallel split / A-B test) BEFORE resolving. If it is false, skip to step 3. 3) resolveBriefCampaign — Resolve card for the remaining open variables. 4) validateBriefCampaign — the compliance gate; on 'block' call resolveBriefCampaign again, on 'warn' keep the warning text. 5) confirmBriefCampaign (pass the warning, if any). Do NOT launch.",
+  "TYPED RESOLVE LOOP (both paths) — THIS TAKES PRECEDENCE OVER ROUTING: once a draft already exists this session (you have already called planCampaignFromBrief or instantiateCampaignTemplate), do NOT route to a path again and do NOT call listCampaignTemplates or planCampaignFromBrief — even if the user's message mentions a template name or id. Treat any later message that names a segment, WhatsApp template, voice agent, fallback wait, split rule, sending window, frequency cap, or start timing as ANSWERS to the open variables. Whenever they type such values, call applyAnswers with their message verbatim as `text`, then read its result: if `unmatched` is non-empty, ask them to pick those from the Resolve card (resolveBriefCampaign / resolveCampaign); if `ready` is false, re-show the Resolve card for what's left; if `ready` is true, go to the validate step. Surface each default it reports as an assumption. Never invent ids — applyAnswers does the mapping.",
+  "When the user names a template directly, a one-clause acknowledgement is enough. After any pick, reply 'Done.' or one short clause.",
+  "NEVER call a resolve/validate/confirm action before its draft exists in this session — Path A needs a template instantiated, Path B needs a brief planned. If a tool says no draft exists yet, go back to that path's first step.",
+  "The level returned by validateCampaign / validateBriefCampaign is computed deterministically — act only on the result; never decide pass/warn/block yourself.",
+  "Never invent ids — use only ids returned by the list actions.",
+].join(" ");
 
 type RuntimeEnv = Record<string, unknown> | undefined;
 
@@ -125,10 +148,127 @@ function buildRuntime(env: RuntimeEnv): {
     };
   }
   const model = readEnvString(env, "PI_AGENT_MODEL") ?? DEFAULT_MODEL;
+  // CopilotKit 1.61's AnthropicAdapter runs on the Vercel AI SDK (@ai-sdk/anthropic)
+  // and copies this client's `baseURL` verbatim into createAnthropic(). The
+  // @anthropic-ai/sdk default baseURL is "https://api.anthropic.com" (it appends
+  // "/v1" per request), but @ai-sdk/anthropic appends "/messages" directly — so the
+  // default drops "/v1" and every call 404s. Pin the version segment explicitly.
+  const anthropic = new Anthropic({ apiKey, baseURL: "https://api.anthropic.com/v1" });
   return {
     runtime: new CopilotRuntime(),
-    serviceAdapter: new AnthropicAdapter({ anthropic: new Anthropic({ apiKey }), model }),
+    serviceAdapter: new AnthropicAdapter({ anthropic, model }),
   };
+}
+
+/** Synthetic tool result spliced in for an abandoned HITL card (see {@link repairOrphanToolCalls}). */
+const ORPHAN_TOOL_RESULT =
+  "This interactive card was dismissed because the user sent a new message instead of using it. Disregard this tool call and act on the user's latest message.";
+
+/** A loosely-typed AG-UI wire message (only the fields this rewrite touches). */
+type WireMessage = {
+  id?: string;
+  role?: string;
+  content?: unknown;
+  toolCallId?: string;
+  toolCalls?: Array<{ id?: string }>;
+};
+
+/**
+ * Repair a run whose history pairs tool calls with their results incorrectly.
+ *
+ * A HITL `renderAndWaitForResponse` card (template / resolve / validate / confirm)
+ * blocks on a never-resolving promise until the user clicks it. If the user instead
+ * TYPES a new message, CopilotKit advances the conversation and two malformations can
+ * reach the wire — both of which Anthropic rejects with
+ * "Tool result is missing for tool call toolu_…":
+ *
+ *  1. ORPHAN — the abandoned assistant tool call is re-sent with no `tool` result
+ *     anywhere in the history.
+ *  2. MISORDERED — the abandoned card later resolves and CopilotKit appends its `tool`
+ *     result, but positioned AFTER the user's typed message rather than immediately
+ *     after the assistant tool call (assistant tool_use → user text → tool result).
+ *     Anthropic needs every tool_result in the user turn that directly follows its
+ *     tool_use, so the interleaved user text breaks the pairing.
+ *
+ * Normalize both: walk the messages, drop every `tool` result from its original slot,
+ * and re-emit it immediately after the assistant turn that owns its `toolCallId`. Any
+ * tool call with no result gets a synthetic neutral result spliced in the same spot, so
+ * each tool_use is always paired with exactly one tool_result, in order, before the
+ * {@link AnthropicAdapter} converts the history.
+ */
+function repairOrphanToolCalls(messages: WireMessage[]): WireMessage[] {
+  const toolResults = new Map<string, WireMessage>();
+  for (const m of messages) {
+    if (m?.role === "tool" && typeof m.toolCallId === "string" && !toolResults.has(m.toolCallId)) {
+      toolResults.set(m.toolCallId, m);
+    }
+  }
+  const emitted = new Set<string>();
+  const out: WireMessage[] = [];
+  for (const m of messages) {
+    // Tool results are re-emitted right after their tool_use, never in their original slot.
+    if (m?.role === "tool" && typeof m.toolCallId === "string") continue;
+    out.push(m);
+    if (m?.role === "assistant" && Array.isArray(m.toolCalls)) {
+      for (const tc of m.toolCalls) {
+        const id = tc?.id;
+        if (typeof id !== "string" || emitted.has(id)) continue;
+        emitted.add(id);
+        const result = toolResults.get(id);
+        out.push(
+          result ?? { id: crypto.randomUUID(), role: "tool", toolCallId: id, content: ORPHAN_TOOL_RESULT },
+        );
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Rewrite an `agent/run` request body before it reaches the runtime:
+ *
+ *  1. {@link repairOrphanToolCalls} — pair any abandoned HITL tool call with a
+ *     synthetic result so Anthropic never sees a dangling tool_use.
+ *  2. Steer the live model by folding {@link PI_SYSTEM_PROMPT} into the latest *user*
+ *     turn's content (prefixed, once, between {@link PI_PROMPT_MARKER} and
+ *     {@link PI_PROMPT_END}).
+ *
+ * Why the user turn and not a `system` message: CopilotKit 1.61's AG-UI BuiltInAgent
+ * path only weakly honors an injected leading system message (the model follows the
+ * functional tool-order but ignores the style/persona rules), whereas content folded
+ * into the user turn is followed reliably. The trade-off is that the client mirrors the
+ * run-input back into its store, so this text would render inside the user's own bubble
+ * — that is suppressed on the client by stripping the delimited prefix before display.
+ *
+ * Returns the original request untouched for non-run requests or unparseable bodies.
+ */
+async function withSystemPrompt(request: Request): Promise<Request> {
+  if (request.method !== "POST") return request;
+  let payload: {
+    method?: string;
+    body?: { messages?: WireMessage[] };
+  };
+  try {
+    payload = JSON.parse(await request.clone().text());
+  } catch {
+    return request;
+  }
+  const messages = payload?.body?.messages;
+  if (payload?.method !== "agent/run" || !Array.isArray(messages)) return request;
+  // 1. Repair any abandoned HITL tool call so the history is well-formed for Anthropic.
+  const repaired = repairOrphanToolCalls(messages);
+  payload.body!.messages = repaired;
+  // 2. Fold the directive into the most recent user turn with string content.
+  for (let i = repaired.length - 1; i >= 0; i--) {
+    const m = repaired[i];
+    if (m?.role !== "user" || typeof m.content !== "string") continue;
+    if (m.content.startsWith(PI_PROMPT_MARKER)) break; // already folded
+    m.content = `${PI_PROMPT_MARKER} ${PI_SYSTEM_PROMPT} ${PI_PROMPT_END}\n\n${m.content}`;
+    break;
+  }
+  const headers = new Headers(request.headers);
+  headers.delete("content-length");
+  return new Request(request.url, { method: request.method, headers, body: JSON.stringify(payload) });
 }
 
 /**
@@ -145,5 +285,5 @@ export async function handleCopilotRequest(request: Request, env?: RuntimeEnv): 
     endpoint: COPILOT_ENDPOINT,
   });
 
-  return handleRequest(request);
+  return handleRequest(await withSystemPrompt(request));
 }

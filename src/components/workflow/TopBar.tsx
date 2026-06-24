@@ -9,7 +9,7 @@ export function TopBar() {
         <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60" />
         <span className="text-muted-foreground">Workflows</span>
         <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/60" />
-        <span className="font-medium text-foreground">Dormant Trader Reactivation</span>
+        <span className="font-medium text-foreground">Lapsed VIP Re-engagement</span>
         <span className="ml-2 inline-flex items-center gap-1.5 rounded-full border border-warning/30 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning">
           <span className="h-1.5 w-1.5 rounded-full bg-warning animate-pulse" />
           Draft

@@ -61,10 +61,11 @@ const M = 60_000, H = 60 * M, D = 24 * H;
 const INITIAL: CampaignRow[] = [
   { id: "c_ex1", name: "Example 1 (Omni-channel React)", state: "ready", createdAt: "Today · 09:00", createdAtTs: NOW - 1 * H, lastEdited: "1m ago", lastEditedTs: NOW - 1 * M, runType: "one-time", lastRun: "—" },
   { id: "c_ex2", name: "Example 2 (Voice-led win-back)",  state: "ready", createdAt: "Today · 09:00", createdAtTs: NOW - 1 * H, lastEdited: "2m ago", lastEditedTs: NOW - 2 * M, runType: "one-time", lastRun: "—" },
-  { id: "c_001", name: "Dormant Trader Reactivation", state: "running", createdAt: "Mar 02, 2026 · 09:14", createdAtTs: Date.parse("2026-03-02T09:14:00"), lastEdited: "4m ago",     lastEditedTs: NOW - 4 * M,   runType: "recurring", lastRun: "running", lastRunAt: "Today · 12:04", lastRunTs: NOW - 30 * M, lastRunId: "\u200B" },
-  { id: "c_002", name: "New Trader Onboarding",       state: "running",  createdAt: "Feb 18, 2026 · 16:02", createdAtTs: Date.parse("2026-02-18T16:02:00"), lastEdited: "1h ago",     lastEditedTs: NOW - 1 * H,   runType: "recurring", lastRun: "completed", lastRunAt: "Today · 11:50", lastRunTs: NOW - 50 * M, lastRunId: "r_8420" },
-  { id: "c_003", name: "High-Value Win-Back",         state: "paused",   createdAt: "Feb 04, 2026 · 11:30", createdAtTs: Date.parse("2026-02-04T11:30:00"), lastEdited: "2h ago",     lastEditedTs: NOW - 2 * H,   runType: "recurring", lastRun: "paused",  lastRunAt: "Today · 11:32", lastRunTs: NOW - 70 * M, lastRunId: "r_8418" },
-  { id: "c_004", name: "KYC Drop-off Recovery",       state: "ready",    createdAt: "Jan 22, 2026 · 10:45", createdAtTs: Date.parse("2026-01-22T10:45:00"), lastEdited: "Yesterday",  lastEditedTs: NOW - 1 * D,   runType: "one-time",  lastRun: "—" },
+  { id: "c_ex3", name: "Example 3 (Loyalty tier journey)", state: "ready", createdAt: "Today · 09:00", createdAtTs: NOW - 1 * H, lastEdited: "3m ago", lastEditedTs: NOW - 3 * M, runType: "one-time", lastRun: "—" },
+  { id: "c_001", name: "Lapsed VIP Re-engagement", state: "running", createdAt: "Mar 02, 2026 · 09:14", createdAtTs: Date.parse("2026-03-02T09:14:00"), lastEdited: "4m ago",     lastEditedTs: NOW - 4 * M,   runType: "recurring", lastRun: "running", lastRunAt: "Today · 12:04", lastRunTs: NOW - 30 * M, lastRunId: "\u200B" },
+  { id: "c_002", name: "Amber Member Onboarding",       state: "running",  createdAt: "Feb 18, 2026 · 16:02", createdAtTs: Date.parse("2026-02-18T16:02:00"), lastEdited: "1h ago",     lastEditedTs: NOW - 1 * H,   runType: "recurring", lastRun: "completed", lastRunAt: "Today · 11:50", lastRunTs: NOW - 50 * M, lastRunId: "r_8420" },
+  { id: "c_003", name: "Elite Tier Win-Back",         state: "paused",   createdAt: "Feb 04, 2026 · 11:30", createdAtTs: Date.parse("2026-02-04T11:30:00"), lastEdited: "2h ago",     lastEditedTs: NOW - 2 * H,   runType: "recurring", lastRun: "paused",  lastRunAt: "Today · 11:32", lastRunTs: NOW - 70 * M, lastRunId: "r_8418" },
+  { id: "c_004", name: "Points Expiry Reminder",       state: "ready",    createdAt: "Jan 22, 2026 · 10:45", createdAtTs: Date.parse("2026-01-22T10:45:00"), lastEdited: "Yesterday",  lastEditedTs: NOW - 1 * D,   runType: "one-time",  lastRun: "—" },
   { id: "c_005", name: "Festive Cashback Push",       state: "draft",    createdAt: "Jan 10, 2026 · 14:20", createdAtTs: Date.parse("2026-01-10T14:20:00"), lastEdited: "3d ago",     lastEditedTs: NOW - 3 * D,   runType: "one-time",  lastRun: "—" },
   { id: "c_006", name: "Inactive Premium Outreach",   state: "archived", createdAt: "Dec 15, 2025 · 08:11", createdAtTs: Date.parse("2025-12-15T08:11:00"), lastEdited: "Apr 12",     lastEditedTs: Date.parse("2026-04-12T12:00:00"), runType: "one-time",  lastRun: "failed", lastRunAt: "Apr 12 · 18:00", lastRunTs: Date.parse("2026-04-12T18:00:00"), lastRunId: "r_7188" },
 ];
@@ -110,14 +111,14 @@ type RunRow = {
 };
 
 const RUNS: RunRow[] = [
-  { id: "\u200B", campaign: "Dormant Trader Reactivation", status: "running",    runType: "recurring", triggerMode: "manual", startedAt: "Today, 12:04 PM",   completedAt: "ongoing",         leadsProcessed: 630,  leadsTotal: 1500 },
-  { id: "r_8420", campaign: "New Trader Onboarding",       status: "running",    runType: "recurring", triggerMode: "api",    startedAt: "Today, 11:50 AM",   completedAt: "ongoing",         leadsProcessed: 1200 },
-  { id: "r_8419", campaign: "KYC Drop-off Recovery",       status: "queued",     runType: "one-time",  triggerMode: "manual", startedAt: "Today, 11:48 AM",   completedAt: "ongoing",         leadsProcessed: 0,    leadsTotal: 820 },
-  { id: "r_8418", campaign: "High-Value Win-Back",         status: "paused",     runType: "recurring", triggerMode: "manual", startedAt: "Today, 11:32 AM",   completedAt: "ongoing",         leadsProcessed: 412,  leadsTotal: 750 },
-  { id: "r_8417", campaign: "Dormant Trader Reactivation", status: "completed",  runType: "recurring", triggerMode: "manual", startedAt: "Today, 10:00 AM",   completedAt: "Today, 11:14 AM", leadsProcessed: 1500, leadsTotal: 1500 },
+  { id: "\u200B", campaign: "Lapsed VIP Re-engagement", status: "running",    runType: "recurring", triggerMode: "manual", startedAt: "Today, 12:04 PM",   completedAt: "ongoing",         leadsProcessed: 630,  leadsTotal: 1500 },
+  { id: "r_8420", campaign: "Amber Member Onboarding",       status: "running",    runType: "recurring", triggerMode: "api",    startedAt: "Today, 11:50 AM",   completedAt: "ongoing",         leadsProcessed: 1200 },
+  { id: "r_8419", campaign: "Points Expiry Reminder",       status: "queued",     runType: "one-time",  triggerMode: "manual", startedAt: "Today, 11:48 AM",   completedAt: "ongoing",         leadsProcessed: 0,    leadsTotal: 820 },
+  { id: "r_8418", campaign: "Elite Tier Win-Back",         status: "paused",     runType: "recurring", triggerMode: "manual", startedAt: "Today, 11:32 AM",   completedAt: "ongoing",         leadsProcessed: 412,  leadsTotal: 750 },
+  { id: "r_8417", campaign: "Lapsed VIP Re-engagement", status: "completed",  runType: "recurring", triggerMode: "manual", startedAt: "Today, 10:00 AM",   completedAt: "Today, 11:14 AM", leadsProcessed: 1500, leadsTotal: 1500 },
   { id: "r_8416", campaign: "Festive Cashback Push",       status: "scheduled",  runType: "one-time",  triggerMode: "manual", startedAt: "Tomorrow, 09:00 AM",completedAt: "ongoing",         leadsProcessed: 0,    leadsTotal: 3200 },
   { id: "r_8415", campaign: "Inactive Premium Outreach",   status: "terminated", runType: "one-time",  triggerMode: "api",    startedAt: "Yesterday, 04:20 PM",completedAt: "Yesterday, 04:38 PM", leadsProcessed: 240 },
-  { id: "r_8414", campaign: "New Trader Onboarding",       status: "completed",  runType: "recurring", triggerMode: "api",    startedAt: "Yesterday, 09:00 AM",completedAt: "Yesterday, 10:12 AM", leadsProcessed: 980 },
+  { id: "r_8414", campaign: "Amber Member Onboarding",       status: "completed",  runType: "recurring", triggerMode: "api",    startedAt: "Yesterday, 09:00 AM",completedAt: "Yesterday, 10:12 AM", leadsProcessed: 980 },
 ];
 
 type Tab = "campaigns" | "runs";
@@ -210,7 +211,9 @@ function CampaignList() {
   const handleCreate = (name: string, description?: string, objective?: string) => {
     setCreateOpen(false);
     toast.success("Campaign created", { description: `${name} · opening builder in Draft` });
-    navigate({ to: "/campaigns/$id", params: { id: "new" }, search: { name, description, objective } as never });
+    // Route into the live Ask Pi agent chat (?agent=true). The agent consumes the
+    // campaign description on landing to proactively suggest templates / accept the brief.
+    navigate({ to: "/campaigns/$id", params: { id: "new" }, search: { name, description, objective, agent: true } as never });
   };
 
   const handleRunStarted = (payload: CreateRunPayload) => {
@@ -678,7 +681,7 @@ function CreateCampaignDialog({
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Dormant Trader Reactivation"
+              placeholder="e.g. Lapsed VIP Re-engagement"
               className="h-9 text-sm"
               onKeyDown={(e) => { if (e.key === "Enter" && name.trim()) submit(); }}
             />

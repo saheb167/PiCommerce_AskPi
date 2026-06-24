@@ -306,13 +306,13 @@ function AudienceFields({ config, readOnly, mark }: { config?: PresetConfig; rea
 }
 
 /* CSV mock data — column keys + a 5-row preview. */
-const CSV_KEYS = ["customer_id", "phone", "first_name", "last_name", "city", "tier", "loan_amount"];
+const CSV_KEYS = ["customer_id", "phone", "first_name", "last_name", "city", "tier", "lifetime_spend"];
 const CSV_PREVIEW_ROWS = [
-  ["C-1042", "+91 98xxx 12340", "Aarav", "Sharma", "Delhi", "gold", "75,000"],
-  ["C-1043", "+91 98xxx 22188", "Diya", "Mehta", "Mumbai", "silver", "32,000"],
-  ["C-1044", "+91 98xxx 90021", "Vihaan", "Rao", "Bengaluru", "gold", "1,20,000"],
-  ["C-1045", "+91 98xxx 41190", "Ananya", "Iyer", "Pune", "bronze", "18,500"],
-  ["C-1046", "+91 98xxx 77342", "Kabir", "Nair", "Delhi", "gold", "64,000"],
+  ["C-1042", "+971 50xxx 12340", "Layla", "Haddad", "Dubai", "elite", "75,000"],
+  ["C-1043", "+971 50xxx 22188", "Omar", "Khan", "Abu Dhabi", "premium", "32,000"],
+  ["C-1044", "+971 50xxx 90021", "Aisha", "Mansoori", "Dubai", "elite", "120,000"],
+  ["C-1045", "+971 50xxx 41190", "Sara", "Nasser", "Sharjah", "classic", "18,500"],
+  ["C-1046", "+971 50xxx 77342", "Yousef", "Ali", "Dubai", "elite", "64,000"],
 ];
 
 type DetectStatus = "idle" | "uploading" | "uploaded" | "detecting" | "detected" | "failed";
@@ -538,7 +538,7 @@ function ApiAudience({ config, readOnly, mark }: { config?: PresetConfig; readOn
   const [fields, setFields] = useState<SchemaField[]>(config?.fields ?? [
     { id: "f1", name: "phone", type: "String" },
     { id: "f2", name: "customer_name", type: "String" },
-    { id: "f3", name: "loan_amount", type: "Number" },
+    { id: "f3", name: "lifetime_spend", type: "Number" },
   ]);
   const [phoneField, setPhoneField] = useState(config?.phoneField ?? "phone");
 
@@ -920,7 +920,7 @@ function VoiceCallCore({ config, readOnly, mark }: { config?: PresetConfig; read
           <Field label="End time"><Input disabled={readOnly} type="time" defaultValue={config?.callEnd ?? "20:00"} className="h-9" /></Field>
         </div>
         <Field label="Timezone">
-          <SelectLike disabled={readOnly} options={["Asia/Kolkata (IST)", "Asia/Dubai (GST)", "America/New_York (EST)", "Europe/London (GMT)"]} onPick={() => undefined} defaultValue={config?.timezone ?? "Asia/Kolkata (IST)"} />
+          <SelectLike disabled={readOnly} options={["Asia/Dubai (GST)", "Asia/Riyadh (AST)", "America/New_York (EST)", "Europe/London (GMT)"]} onPick={() => undefined} defaultValue={config?.timezone ?? "Asia/Dubai (GST)"} />
         </Field>
       </Section>
       <Section title="Retry">
@@ -981,7 +981,7 @@ function WhatsAppCore({ config, readOnly, mark }: { config?: PresetConfig; readO
         <Field label="Connected number" required>
           <SelectLike
             disabled={readOnly}
-            options={["+91 98100 12345 · PiCommerce", "+91 98200 67890 · PiCommerce Support", "+91 98300 11223 · Paytm Money"]}
+            options={["+971 4 123 4567 · Amber", "+971 4 123 4568 · Amber Support", "+971 4 123 4569 · Al Tayer"]}
             defaultValue={config?.waNumber}
             onPick={() => setNumberSelected(true)}
             placeholder="Select connected number…"
@@ -1137,7 +1137,7 @@ function AdsCampaignFields({ readOnly, mark }: { readOnly?: boolean; mark: (v: b
               <Field label="Age min"><Input disabled={readOnly} type="number" defaultValue={25} className="h-9" /></Field>
               <Field label="Age max"><Input disabled={readOnly} type="number" defaultValue={55} className="h-9" /></Field>
             </div>
-            <Field label="Interests"><Input disabled={readOnly} placeholder="Investing, stocks, mutual funds" className="h-9" /></Field>
+            <Field label="Interests"><Input disabled={readOnly} placeholder="Fashion, beauty, luxury watches" className="h-9" /></Field>
           </>
         ) : (
           <>
@@ -1156,7 +1156,7 @@ function AdsCampaignFields({ readOnly, mark }: { readOnly?: boolean; mark: (v: b
 
       <Section title="Budget & Schedule">
         <div className="grid grid-cols-2 gap-2">
-          <Field label="Daily budget (₹)" required><Input disabled={readOnly} type="number" placeholder="5000" className="h-9" onChange={() => mark(true)} /></Field>
+          <Field label="Daily budget (AED)" required><Input disabled={readOnly} type="number" placeholder="500" className="h-9" onChange={() => mark(true)} /></Field>
           <Field label="Bid strategy"><SelectLike disabled={readOnly} options={["Lowest cost", "Cost cap", "Bid cap"]} onPick={() => undefined} defaultValue="Lowest cost" /></Field>
         </div>
         <div className="grid grid-cols-2 gap-2">

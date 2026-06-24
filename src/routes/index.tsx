@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { AppShell, PageHeader } from "@/components/app/AppShell";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { ArrowUpRight, Megaphone, Bot, Activity, Plus, CheckCircle2, AlertTriangle } from "lucide-react";
 
 export const Route = createFileRoute("/")({
@@ -13,20 +15,39 @@ export const Route = createFileRoute("/")({
   }),
 });
 
+/** Hardcoded FX rate. All money figures are stored in AED and converted on render. */
+const AED_TO_INR = 23.4;
+type Currency = "AED" | "INR";
+
+const inrFmt = new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 });
+const aedFmt = new Intl.NumberFormat("en-AE", { maximumFractionDigits: 0 });
+
+function formatMoney(aed: number, currency: Currency): string {
+  if (aed <= 0) return "—";
+  return currency === "INR" ? `₹${inrFmt.format(aed * AED_TO_INR)}` : `AED ${aedFmt.format(aed)}`;
+}
+
 function Dashboard() {
+  const [currency, setCurrency] = useState<Currency>("AED");
+
   return (
     <AppShell>
       <PageHeader
         title="Good morning, Aman"
         description="Here's what's Live across your workspace right now."
         actions={
-          <Button size="sm" className="h-8 gap-1.5 text-xs" asChild>
-            <Link to="/campaigns"><Plus className="h-3.5 w-3.5" /> New campaign</Link>
-          </Button>
+          <>
+            <CurrencyToggle value={currency} onChange={setCurrency} />
+            <Button size="sm" className="h-8 gap-1.5 text-xs" asChild>
+              <Link to="/campaigns"><Plus className="h-3.5 w-3.5" /> New campaign</Link>
+            </Button>
+          </>
         }
       />
 
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-3 gap-3">
+        <Kpi label="Revenue / 24h" value={formatMoney(184500, currency)} delta="+12.4%" positive />
+        <Kpi label="Campaign spend / 24h" value={formatMoney(32750, currency)} delta="-3.1%" positive />
         <Kpi label="Active campaigns" value="12" delta="+2 this week" />
         <Kpi label="Conversations / 24h" value="48.2K" delta="+18%" positive />
         <Kpi label="Conversion rate" value="6.4%" delta="+0.8 pp" positive />
@@ -47,7 +68,7 @@ function Dashboard() {
           <ul className="divide-y divide-border">
             {LIVE.map((c) => (
               <li key={c.name} className="flex items-center gap-3 px-4 py-3 text-sm">
-                <span className={`h-1.5 w-1.5 rounded-full ${c.status === "running" ? "bg-success animate-pulse" : c.status === "paused" ? "bg-warning" : "bg-muted-foreground"}`} />
+                <span className={`h-1.5 w-1.5 rounded-full ${c.status === "running" ? "bg-success animate-pulse" : "bg-muted-foreground"}`} />
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-medium">{c.name}</p>
                   <p className="text-[11px] text-muted-foreground">{c.channels.join(" · ")} · owned by {c.owner}</p>
@@ -55,6 +76,10 @@ function Dashboard() {
                 <div className="hidden text-right md:block">
                   <p className="font-mono text-[12px]">{c.runs}</p>
                   <p className="text-[10.5px] text-muted-foreground">runs / 24h</p>
+                </div>
+                <div className="hidden w-28 text-right sm:block">
+                  <p className="font-mono text-[12px]">{formatMoney(c.spend, currency)}</p>
+                  <p className="text-[10.5px] text-muted-foreground">spend / 24h</p>
                 </div>
                 <div className="w-20 text-right">
                   <p className="font-mono text-[12px]">{c.conv}</p>
@@ -109,6 +134,32 @@ function Kpi({ label, value, delta, positive }: { label: string; value: string; 
   );
 }
 
+function CurrencyToggle({ value, onChange }: { value: Currency; onChange: (c: Currency) => void }) {
+  return (
+    <div
+      className="inline-flex items-center rounded-md border border-border bg-card p-0.5"
+      role="group"
+      aria-label="Display currency"
+      title={`1 AED = ₹${AED_TO_INR}`}
+    >
+      {(["AED", "INR"] as const).map((c) => (
+        <button
+          key={c}
+          type="button"
+          onClick={() => onChange(c)}
+          aria-pressed={value === c}
+          className={cn(
+            "rounded px-2.5 py-1 text-[11.5px] font-medium transition-colors",
+            value === c ? "bg-foreground text-background" : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {c}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ShortcutCard({ icon: Icon, title, desc, to }: { icon: React.ComponentType<{ className?: string }>; title: string; desc: string; to: string }) {
   return (
     <Link to={to} className="group rounded-xl border border-border bg-card p-4 transition-colors hover:border-foreground/20 hover:bg-accent/30">
@@ -123,15 +174,15 @@ function ShortcutCard({ icon: Icon, title, desc, to }: { icon: React.ComponentTy
 }
 
 const LIVE = [
-  { name: "Dormant Trader Reactivation", channels: ["WhatsApp", "Voice AI"], owner: "Aman", runs: "12,402", conv: "7.1%", status: "running" },
-  { name: "New Trader Onboarding", channels: ["Email", "Push", "AI"], owner: "Priya", runs: "8,201", conv: "11.4%", status: "running" },
-  { name: "High-Value Win-Back", channels: ["Voice AI", "WhatsApp"], owner: "Aman", runs: "1,028", conv: "4.2%", status: "paused" },
-  { name: "KYC Drop-off Recovery", channels: ["WhatsApp", "SMS"], owner: "Ria", runs: "3,920", conv: "9.8%", status: "running" },
-  { name: "Meta Audience Sync", channels: ["Meta Ads"], owner: "Ops bot", runs: "—", conv: "—", status: "idle" },
+  { name: "Lapsed VIP Re-engagement", channels: ["WhatsApp", "Voice AI"], owner: "Layla", runs: "12,402", conv: "7.1%", spend: 9800, status: "running" },
+  { name: "Amber Member Onboarding", channels: ["Email", "Push", "AI"], owner: "Priya", runs: "8,201", conv: "11.4%", spend: 6400, status: "running" },
+  { name: "Elite Tier Win-Back", channels: ["Voice AI", "WhatsApp"], owner: "Layla", runs: "1,028", conv: "4.2%", spend: 1200, status: "running" },
+  { name: "Points Expiry Reminder", channels: ["WhatsApp", "SMS"], owner: "Ria", runs: "3,920", conv: "9.8%", spend: 3100, status: "running" },
+  { name: "Boutique Footfall Drive", channels: ["Meta Ads"], owner: "Ops bot", runs: "—", conv: "—", spend: 0, status: "idle" },
 ] as const;
 
 const APPROVALS = [
   { type: "approval", title: "Approve Meta Ads push", detail: "Custom audience of 42,318 users ready for sync." },
-  { type: "alert", title: "Voice AI sentiment dip", detail: "Reactivation flow → avg sentiment dropped to -0.21." },
+  { type: "alert", title: "Voice AI sentiment dip", detail: "Lapsed VIP flow → avg sentiment dropped to -0.21." },
   { type: "approval", title: "New agent · ‘Pi Concierge’", detail: "Awaiting review before going live in production." },
 ] as const;

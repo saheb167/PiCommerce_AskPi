@@ -37,39 +37,39 @@ export type TenantDefaults = {
 };
 
 export const SEGMENTS: Segment[] = [
-  { id: "seg_emi_predue_3d", label: "EMI due in 3 days · Suryoday SFB", size: "8,210" },
-  { id: "seg_emi_predue_7d", label: "EMI due in 7 days · Suryoday SFB", size: "14,905" },
-  { id: "seg_cart_48h", label: "Abandoned cart · last 48h · StyleZen", size: "3,477" },
-  { id: "seg_cart_7d", label: "Abandoned cart · last 7d · StyleZen", size: "11,260" },
-  { id: "seg_dormant_90d", label: "Dormant traders · 90d", size: "26,540" },
+  { id: "seg_points_expiry_30d", label: "Amber points expiring in 30 days", size: "8,210" },
+  { id: "seg_points_expiry_60d", label: "Amber points expiring in 60 days", size: "14,905" },
+  { id: "seg_cart_48h", label: "Abandoned cart · last 48h · Al Tayer", size: "3,477" },
+  { id: "seg_cart_7d", label: "Abandoned cart · last 7d · Al Tayer", size: "11,260" },
+  { id: "seg_lapsed_90d", label: "Lapsed members · 90d", size: "26,540" },
 ];
 
 export const WA_TEMPLATES: WaTemplate[] = [
-  { id: "wa_emi_predue_v3", label: "emi_pre_due_reminder_v3", category: "Utility", status: "approved", vars: ["{{1}}", "{{2}}"] },
+  { id: "wa_points_expiry_v3", label: "points_expiry_reminder_v3", category: "Utility", status: "approved", vars: ["{{1}}", "{{2}}"] },
   { id: "wa_cart_recovery_v2", label: "cart_recovery_v2", category: "Marketing", status: "approved", vars: ["{{1}}", "{{2}}"] },
   { id: "wa_cart_recovery_v3", label: "cart_recovery_v3", category: "Marketing", status: "pending_reapproval", vars: ["{{1}}", "{{2}}"] },
   { id: "wa_reactivate_v3", label: "reactivate_v3", category: "Marketing", status: "approved", vars: ["{{1}}"] },
 ];
 
 export const SMS_SENDERS: SmsSender[] = [
-  { id: "sms_picomm", senderId: "PICOMM", peId: "1101234567890123456", label: "PICOMM · Promotional" },
-  { id: "sms_styzen", senderId: "STYZEN", peId: "1107654321098765432", label: "STYZEN · Promotional" },
-  { id: "sms_surday", senderId: "SURDAY", peId: "1109988776655443322", label: "SURDAY · Transactional" },
+  { id: "sms_amber", senderId: "AMBER", peId: "1101234567890123456", label: "AMBER · Promotional" },
+  { id: "sms_altayer", senderId: "ALTAYR", peId: "1107654321098765432", label: "ALTAYR · Promotional" },
+  { id: "sms_ambertx", senderId: "AMBRTX", peId: "1109988776655443322", label: "AMBRTX · Transactional" },
 ];
 
 /** Voice agents mirror the live voice agents from agents.index.tsx (live only). */
 export const VOICE_AGENTS: VoiceAgentRef[] = [
   { id: "a_voice_react", name: "Reactivation Voice", type: "voice", status: "live" },
-  { id: "a_emi_voice", name: "EMI Reminder Voice", type: "voice", status: "live" },
+  { id: "a_points_voice", name: "Points Expiry Voice", type: "voice", status: "live" },
   { id: "a_winback", name: "Win-back Voice", type: "voice", status: "live" },
 ];
 
 export const TENANT_DEFAULTS: TenantDefaults = {
   windowStart: "10:00",
   windowEnd: "19:00",
-  timezone: "Asia/Kolkata (IST)",
+  timezone: "Asia/Dubai (GST)",
   freqCap: "2 / week",
-  waNumber: "+91 98100 12345 · PiCommerce",
+  waNumber: "+971 4 123 4567 · Amber",
 };
 
 /* ---------------------------------------------------------------- */
@@ -85,7 +85,9 @@ export type TemplateVar =
   | { key: string; kind: "splitAttribute"; label: string; required?: boolean }
   | { key: string; kind: "threshold"; label: string; default: string; required?: boolean }
   | { key: string; kind: "splitValue"; label: string; options: string[]; required?: boolean }
-  | { key: string; kind: "percent"; label: string; default: string; required?: boolean };
+  | { key: string; kind: "percent"; label: string; default: string; required?: boolean }
+  | { key: string; kind: "window"; label: string; default: string; required?: boolean }
+  | { key: string; kind: "choice"; label: string; default: string; options: string[]; required?: boolean };
 
 /**
  * Audience attributes a no-fallback multi-channel campaign can split on. A
@@ -102,13 +104,13 @@ export type SplitAttribute = {
   options?: string[];
 };
 export const SPLIT_ATTRIBUTES: SplitAttribute[] = [
-  { id: "cart_value", label: "Cart value", unit: "₹", example: "5000", type: "numeric" },
-  { id: "order_value", label: "Lifetime order value", unit: "₹", example: "25000", type: "numeric" },
+  { id: "cart_value", label: "Cart value", unit: "AED", example: "1500", type: "numeric" },
+  { id: "order_value", label: "Lifetime order value", unit: "AED", example: "12000", type: "numeric" },
   { id: "engagement_score", label: "Engagement score", unit: "", example: "60", type: "numeric" },
-  { id: "loyalty_points", label: "Loyalty points", unit: "", example: "1000", type: "numeric" },
-  { id: "customer_type", label: "Customer type", unit: "", example: "Returning", type: "categorical", options: ["New", "Returning", "VIP"] },
-  { id: "city_tier", label: "City tier", unit: "", example: "Metro", type: "categorical", options: ["Metro", "Tier 2", "Tier 3"] },
-  { id: "language", label: "Preferred language", unit: "", example: "Hindi", type: "categorical", options: ["Hindi", "English", "Tamil"] },
+  { id: "loyalty_points", label: "Amber points", unit: "", example: "1000", type: "numeric" },
+  { id: "customer_type", label: "Member tier", unit: "", example: "Premium", type: "categorical", options: ["Classic", "Premium", "Elite"] },
+  { id: "city_tier", label: "Emirate", unit: "", example: "Dubai", type: "categorical", options: ["Dubai", "Abu Dhabi", "Sharjah"] },
+  { id: "language", label: "Preferred language", unit: "", example: "Arabic", type: "categorical", options: ["Arabic", "English", "French"] },
 ];
 export const findSplitAttribute = (id?: string) => SPLIT_ATTRIBUTES.find((a) => a.id === id);
 
@@ -141,6 +143,55 @@ export function experimentVars(): TemplateVar[] {
   ];
 }
 
+/**
+ * The open variables a conditional branch adds, shaped by the chosen attribute:
+ * always the attribute picker, plus a numeric `conditionThreshold` OR a
+ * categorical `conditionValue` that defines the Match branch (the rest take the
+ * Else branch). Distinct keys (conditionAttribute / conditionValue /
+ * conditionThreshold) so they never collide with an A/B split's vars, but reuse
+ * the split *kinds* so the Resolve card + resolveFromText handle them unchanged.
+ */
+export function conditionFieldsFor(attrId?: string): TemplateVar[] {
+  const attr = findSplitAttribute(attrId);
+  const picker: TemplateVar = { key: "conditionAttribute", kind: "splitAttribute", label: "Branch audience by", required: true };
+  if (!attr) return [picker];
+  if (attr.type === "categorical") {
+    return [
+      picker,
+      { key: "conditionValue", kind: "splitValue", label: `${attr.label} that takes the Match branch`, options: attr.options ?? [], required: true },
+    ];
+  }
+  return [
+    picker,
+    { key: "conditionThreshold", kind: "threshold", label: "Threshold (≥ takes the Match branch)", default: "", required: true },
+  ];
+}
+
+/* ---------------------------------------------------------------- */
+/* Timing — the "when" open variables (folded into the Resolve card) */
+/* ---------------------------------------------------------------- */
+
+/** The tenant's default sending window, as one "HH:MM–HH:MM" string. */
+export const DEFAULT_SEND_WINDOW = `${TENANT_DEFAULTS.windowStart}–${TENANT_DEFAULTS.windowEnd}`;
+/** Frequency-cap presets offered on the Resolve card. */
+export const FREQUENCY_OPTIONS = ["1 / week", "2 / week", "3 / week", "No cap"];
+/** Concrete start presets (no real scheduler in the demo — relative labels only). */
+export const START_OPTIONS = ["As soon as approved", "Tomorrow 10:00", "Next Monday 10:00"];
+
+/**
+ * The "when" open variables every brief carries: sending window, frequency cap,
+ * and start timing. All optional — each ships with the tenant default, surfaced
+ * as an assumption until the user edits it on the Resolve card. Added to the
+ * brief-path gaps only (the A1 template path keeps its own declared vars).
+ */
+export function timingVars(): TemplateVar[] {
+  return [
+    { key: "sendWindow", kind: "window", label: "Sending window", default: DEFAULT_SEND_WINDOW, required: false },
+    { key: "frequencyCap", kind: "choice", label: "Frequency cap", default: TENANT_DEFAULTS.freqCap, options: FREQUENCY_OPTIONS, required: false },
+    { key: "startTiming", kind: "choice", label: "Start", default: START_OPTIONS[0], options: START_OPTIONS, required: false },
+  ];
+}
+
 /* ---------------------------------------------------------------- */
 /* Lookup helpers                                                   */
 /* ---------------------------------------------------------------- */
@@ -167,6 +218,218 @@ const durationLabel = (raw: string) => {
 };
 
 /* ---------------------------------------------------------------- */
+/* Free-text → registry id matchers (for the typed resolve loop)    */
+/* ---------------------------------------------------------------- */
+
+/**
+ * Map free-form user text to a real registry id, or `undefined` when nothing
+ * matches confidently. The agent never invents ids — when the user *types* an
+ * answer mid-resolve ("use the lapsed members segment") these matchers turn it
+ * into the same id a picker would have produced. An exact id/label hit always
+ * wins; otherwise a small keyword table resolves the demo registries. Matching
+ * is conservative: ambiguous text returns undefined so the card stays the
+ * fallback.
+ */
+export function matchSegment(text: string): string | undefined {
+  const t = (text || "").toLowerCase();
+  const exact = SEGMENTS.find((s) => t.includes(s.id) || t.includes(s.label.toLowerCase()));
+  if (exact) return exact.id;
+  if (/lapsed|inactive|haven'?t shopped|win.?back|dormant/.test(t)) return "seg_lapsed_90d";
+  if (/cart|abandon/.test(t)) return /\b7\s*d|7\s*day|week/.test(t) ? "seg_cart_7d" : "seg_cart_48h";
+  if (/points|expir/.test(t)) return /\b60\b/.test(t) ? "seg_points_expiry_60d" : "seg_points_expiry_30d";
+  return undefined;
+}
+
+export function matchWaTemplate(text: string): string | undefined {
+  const t = (text || "").toLowerCase();
+  const exact = WA_TEMPLATES.find((w) => t.includes(w.id) || t.includes(w.label.toLowerCase()));
+  if (exact) return exact.id;
+  if (/reactivat/.test(t)) return "wa_reactivate_v3";
+  if (/points|expir/.test(t)) return "wa_points_expiry_v3";
+  if (/cart|recovery/.test(t)) return /v3/.test(t) ? "wa_cart_recovery_v3" : "wa_cart_recovery_v2";
+  return undefined;
+}
+
+export function matchVoiceAgent(text: string): string | undefined {
+  const t = (text || "").toLowerCase();
+  const exact = VOICE_AGENTS.find((a) => t.includes(a.id) || t.includes(a.name.toLowerCase()));
+  if (exact) return exact.id;
+  if (/reactivat/.test(t)) return "a_voice_react";
+  if (/points|expir/.test(t)) return "a_points_voice";
+  if (/win.?back/.test(t)) return "a_winback";
+  return undefined;
+}
+
+export function matchSplitAttribute(text: string): string | undefined {
+  const t = (text || "").toLowerCase();
+  const exact = SPLIT_ATTRIBUTES.find((a) => t.includes(a.id) || t.includes(a.label.toLowerCase()));
+  if (exact) return exact.id;
+  if (/cart\s*value/.test(t)) return "cart_value";
+  if (/order|lifetime|ltv/.test(t)) return "order_value";
+  if (/engage/.test(t)) return "engagement_score";
+  if (/points|loyalty/.test(t)) return "loyalty_points";
+  if (/tier|premium|elite|classic/.test(t)) return "customer_type";
+  if (/emirate|city|dubai|abu dhabi|sharjah/.test(t)) return "city_tier";
+  if (/language|arabic|english|french/.test(t)) return "language";
+  return undefined;
+}
+
+/**
+ * Parse a free-text time range ("10:00–19:00", "9am to 5pm", "between 11 and 18")
+ * into normalised 24h "HH:MM" bounds, or `undefined` when two times aren't found.
+ */
+export function parseSendWindow(raw: string): { start: string; end: string } | undefined {
+  const t = (raw || "").trim();
+  if (!t) return undefined;
+  const re = /(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi;
+  const times: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(t)) !== null && times.length < 2) {
+    let h = parseInt(m[1], 10);
+    const min = m[2] ?? "00";
+    const ap = m[3]?.toLowerCase();
+    if (ap === "pm" && h < 12) h += 12;
+    if (ap === "am" && h === 12) h = 0;
+    if (h > 23 || Number(min) > 59) continue;
+    times.push(`${String(h).padStart(2, "0")}:${min}`);
+  }
+  if (times.length < 2) return undefined;
+  return { start: times[0], end: times[1] };
+}
+
+/** True when a sending window stays inside the 9am–9pm quiet-hours rule (start < end). */
+export function windowWithinQuietHours(window: string): boolean {
+  const w = parseSendWindow(window);
+  if (!w) return true; // unparseable text never blocks
+  const toMin = (s: string) => {
+    const [h, mm] = s.split(":").map(Number);
+    return h * 60 + (mm || 0);
+  };
+  const start = toMin(w.start);
+  const end = toMin(w.end);
+  return start >= 9 * 60 && end <= 21 * 60 && start < end;
+}
+
+/** Map free text to a frequency-cap preset ("twice a week" → "2 / week", "no limit" → "No cap"). */
+export function matchFrequency(text: string): string | undefined {
+  const t = (text || "").toLowerCase();
+  if (/no cap|no limit|unlimited|no frequency|don'?t cap/.test(t)) return "No cap";
+  const n = t.match(/(\d+)\s*(?:\/|per|x|a|times?(?:\s+a)?)?\s*(?:week|wk)/);
+  if (n) return `${n[1]} / week`;
+  if (/once a week|weekly/.test(t)) return "1 / week";
+  if (/twice a week|two a week/.test(t)) return "2 / week";
+  if (/thrice|three a week/.test(t)) return "3 / week";
+  return undefined;
+}
+
+/** Map free text to a start preset ("immediately" → as soon as approved, "tomorrow", "next Monday"). */
+export function matchStart(text: string): string | undefined {
+  const t = (text || "").toLowerCase();
+  if (/as soon|immediately|right away|asap|once approved|on approval|straight away/.test(t)) return "As soon as approved";
+  if (/tomorrow/.test(t)) return "Tomorrow 10:00";
+  if (/monday|next week/.test(t)) return "Next Monday 10:00";
+  return undefined;
+}
+
+/**
+ * Given the currently-open variables and a user's free-text message, extract
+ * only the values that match confidently (keyed by `TemplateVar.key`), plus the
+ * required keys that could NOT be filled. Used by the `applyAnswers` action so a
+ * typed answer is interchangeable with the Resolve card. Optional vars left
+ * unmentioned aren't "unmatched" — they keep their default.
+ */
+export function resolveFromText(
+  vars: TemplateVar[],
+  text: string,
+): { values: Record<string, string>; unmatched: string[] } {
+  const t = text || "";
+  const values: Record<string, string> = {};
+  const durationRe = /\d+\s*(?:m|min|minute|h|hr|hour|d|day)s?/i;
+  const timeToken = t.match(durationRe);
+  // A duration tied to the fallback wins over an incidental time mention elsewhere
+  // (e.g. "points expiring in 30 days … fallback 6h" must bind the wait to 6h, not 30d).
+  const scopedToken =
+    t.match(new RegExp(`(?:fallback|wait|window|delay|after)\\D{0,16}(${durationRe.source})`, "i"))?.[1] ??
+    timeToken?.[0];
+
+  for (const v of vars) {
+    switch (v.kind) {
+      case "segment": {
+        const id = matchSegment(t);
+        if (id) values[v.key] = id;
+        break;
+      }
+      case "waTemplate": {
+        const id = matchWaTemplate(t);
+        if (id) values[v.key] = id;
+        break;
+      }
+      case "voiceAgent": {
+        const id = matchVoiceAgent(t);
+        if (id) values[v.key] = id;
+        break;
+      }
+      case "smsSender": {
+        const s = SMS_SENDERS.find((x) => t.toLowerCase().includes(x.id) || t.toLowerCase().includes(x.senderId.toLowerCase()));
+        if (s) values[v.key] = s.id;
+        break;
+      }
+      case "duration": {
+        if (scopedToken) values[v.key] = durationLabel(scopedToken);
+        break;
+      }
+      case "percent": {
+        const pm = t.match(/(\d{1,3})\s*%/) ?? (/%|a\/b|split|test/i.test(t) ? t.match(/\b(\d{1,3})\b/) : null);
+        if (pm) values[v.key] = pm[1];
+        break;
+      }
+      case "splitAttribute": {
+        const id = matchSplitAttribute(t);
+        if (id) values[v.key] = id;
+        break;
+      }
+      case "splitValue": {
+        const opt = v.options.find((o) => t.toLowerCase().includes(o.toLowerCase()));
+        if (opt) values[v.key] = opt;
+        break;
+      }
+      case "threshold": {
+        // A bare number that isn't a time/percent token (those are handled above).
+        const nm = t.match(/\b(\d{2,})\b/);
+        if (nm && !timeToken) values[v.key] = nm[1];
+        break;
+      }
+      case "window": {
+        // Only bind when the text clearly states a time RANGE, not an incidental time.
+        const range = t.match(
+          /(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\s*(?:–|—|-|to|until|till|through|and)\s*(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i,
+        );
+        if (range) {
+          const w = parseSendWindow(range[0]);
+          if (w) values[v.key] = `${w.start}–${w.end}`;
+        }
+        break;
+      }
+      case "choice": {
+        const opt = v.options.find((o) => t.toLowerCase().includes(o.toLowerCase()));
+        if (opt) { values[v.key] = opt; break; }
+        if (v.key === "frequencyCap") {
+          const f = matchFrequency(t);
+          if (f) values[v.key] = f;
+        } else if (v.key === "startTiming") {
+          const s = matchStart(t);
+          if (s) values[v.key] = s;
+        }
+        break;
+      }
+    }
+  }
+
+  const unmatched = vars.filter((v) => v.required && !values[v.key]).map((v) => v.key);
+  return { values, unmatched };
+}
+
+/* ---------------------------------------------------------------- */
 /* Channels — the building blocks for templates and briefs          */
 /* ---------------------------------------------------------------- */
 
@@ -191,6 +454,10 @@ export type BriefConfig = {
   fallbackWait: string;
   unavailable?: string[];
   experiment?: boolean;
+  /** Marks a conditional-branch framing — the audience is routed down a Match / Else branch on an attribute. */
+  conditional?: boolean;
+  /** False when the brief named no channel (we defaulted to WhatsApp) — Pi then captures channels via a card. */
+  channelsNamed?: boolean;
 };
 
 export const CHANNEL_META: Record<
@@ -272,7 +539,7 @@ function buildFromChannels(name: string, cfg: BriefConfig, resolved: Record<stri
 }
 
 /** Fixed canvas node id for each channel (kept stable for applyResolved patches). */
-const CHANNEL_NODE_ID: Record<Channel, string> = { whatsapp: "wa", voice: "voice" };
+export const CHANNEL_NODE_ID: Record<Channel, string> = { whatsapp: "wa", voice: "voice" };
 
 /**
  * Parallel journey for multiple channels with NO fallback: audience fans out
@@ -311,6 +578,82 @@ function buildParallelChannels(name: string, cfg: BriefConfig, resolved: Record<
   return { nodes, edges, name };
 }
 
+/** Fixed canvas node id for the conditional branch node (stable for patching). */
+export const CONDITION_NODE_ID = "branch";
+
+/**
+ * Conditional journey: start → audience → a conditional branch node whose two
+ * labeled outputs (Match / Else) route — via `sourceHandle` edges — to a channel
+ * node or straight to End. Match defaults to the primary channel, Else to the
+ * other channel (or End when only one channel is in play); the resolve card can
+ * override both. The branch node's subtitle states the rule (attribute ≥ value /
+ * = value); routing is read from `resolved.branchMatch` / `resolved.branchElse`
+ * (a channel node id or "end"). A channel node is built only when the routing
+ * actually targets it. Stable node ids (audience / branch / wa / voice / end).
+ */
+export function buildConditionalChannels(
+  name: string,
+  cfg: BriefConfig,
+  resolved: Record<string, string>,
+): AskPiPlan {
+  const seg = findSegment(resolved.segment);
+  const attr = findSplitAttribute(resolved.conditionAttribute);
+  const categorical = attr?.type === "categorical";
+  const branchValue = categorical ? resolved.conditionValue : resolved.conditionThreshold;
+  const matchCut = attr
+    ? categorical
+      ? `${attr.label} = ${resolved.conditionValue ?? "…"}`
+      : `${attr.label} ≥ ${attr.unit}${resolved.conditionThreshold ?? "…"}`
+    : "Set the branch rule";
+
+  // Routing targets — default Match→primary, Else→other channel (or End).
+  const elseDefaultCh = cfg.channels.find((c) => c !== cfg.primary);
+  const matchTarget = resolved.branchMatch || CHANNEL_NODE_ID[cfg.primary];
+  const elseTarget = resolved.branchElse || (elseDefaultCh ? CHANNEL_NODE_ID[elseDefaultCh] : "end");
+
+  const nodes: Node<WorkflowNodeData>[] = [
+    { id: "start", type: "workflow", position: { x: 0, y: 0 },
+      data: { kind: "start", title: "Start", locked: true, valid: true } },
+    { id: "audience", type: "workflow", position: { x: 0, y: 120 },
+      data: { kind: "audience", title: "Audience",
+        subtitle: seg ? `${seg.label} · ${seg.size}` : "Select segment",
+        valid: !!seg, error: seg ? undefined : "Select segment",
+        config: { audienceMode: "api", phoneField: "contact.phone" } } },
+    { id: CONDITION_NODE_ID, type: "workflow", position: { x: 0, y: 240 },
+      data: { kind: "conditional", title: "Conditional branch",
+        subtitle: matchCut,
+        valid: !!attr && !!branchValue,
+        error: attr && branchValue ? undefined : "Set the branch rule",
+        outputs: [
+          { id: "match", label: "Match", kind: "branch" },
+          { id: "else", label: "Else", kind: "branch" },
+        ] } },
+  ];
+
+  // A channel node is built only when routing actually targets it.
+  const usedChannels = cfg.channels.filter(
+    (ch) => matchTarget === CHANNEL_NODE_ID[ch] || elseTarget === CHANNEL_NODE_ID[ch],
+  );
+  let x = -180;
+  for (const ch of usedChannels) {
+    const node = channelNode(ch, 380, resolved);
+    node.position = { x, y: 380 };
+    nodes.push(node);
+    x += 360;
+  }
+  nodes.push({ id: "end", type: "workflow", position: { x: 0, y: 520 },
+    data: { kind: "end", title: "End", locked: true, valid: true } });
+
+  const edges: Edge[] = [
+    { id: "e_start_audience", source: "start", target: "audience" },
+    { id: "e_audience_branch", source: "audience", target: CONDITION_NODE_ID },
+    { id: `e_branch_match_${matchTarget}`, source: CONDITION_NODE_ID, sourceHandle: "match", target: matchTarget },
+    { id: `e_branch_else_${elseTarget}`, source: CONDITION_NODE_ID, sourceHandle: "else", target: elseTarget },
+    ...usedChannels.map((ch) => ({ id: `e_${CHANNEL_NODE_ID[ch]}_end`, source: CHANNEL_NODE_ID[ch], target: "end" })),
+  ];
+  return { nodes, edges, name };
+}
+
 /** Open variables implied by a channel config: segment + each channel's resource + fallback window. */
 function channelOpenVars(cfg: BriefConfig): TemplateVar[] {
   const vars: TemplateVar[] = [
@@ -332,6 +675,10 @@ function channelOpenVars(cfg: BriefConfig): TemplateVar[] {
 /** Human-readable "Primary X → fallback Y (on non-delivery)" line. */
 export function channelsSummary(cfg: BriefConfig): string {
   const p = CHANNEL_META[cfg.primary].label;
+  if (cfg.conditional) {
+    const other = cfg.channels.find((c) => c !== cfg.primary);
+    return `Conditional branch — Match → ${p}; Else → ${other ? CHANNEL_META[other].label : "End"} (routed on an audience attribute)`;
+  }
   if (cfg.experiment && cfg.channels.length > 1) {
     return `A/B test — ${cfg.channels.map((c) => CHANNEL_META[c].label).join(" vs ")} on a split audience`;
   }
@@ -365,7 +712,7 @@ export type CampaignTemplate = {
   samples?: Partial<Record<Channel, string>>;
 };
 
-function emiTemplateBuild(resolved: Record<string, string>): AskPiPlan {
+function pointsExpiryTemplateBuild(resolved: Record<string, string>): AskPiPlan {
   const seg = findSegment(resolved.segment);
   const wa = findWaTemplate(resolved.waTemplate);
   const agent = findVoiceAgent(resolved.voiceAgent);
@@ -389,7 +736,7 @@ function emiTemplateBuild(resolved: Record<string, string>): AskPiPlan {
         config: {
           waNumber: TENANT_DEFAULTS.waNumber, waMode: "template",
           waTemplate: wa ? `${wa.label} · ${wa.category}` : undefined,
-          waVarMap: [{ v: "{{1}}", def: "contact.first_name" }, { v: "{{2}}", def: "payload.amount" }],
+          waVarMap: [{ v: "{{1}}", def: "contact.first_name" }, { v: "{{2}}", def: "payload.points" }],
         },
       } },
     { id: "delay", type: "workflow", position: { x: 0, y: 360 },
@@ -420,7 +767,7 @@ function emiTemplateBuild(resolved: Record<string, string>): AskPiPlan {
     { id: "e_d_v", source: "delay", target: "voice" },
     { id: "e_v_e", source: "voice", target: "end" },
   ];
-  return { nodes, edges, name: "Pre-due EMI Reminder" };
+  return { nodes, edges, name: "Points Expiry Reminder" };
 }
 
 const tenantAssumptions = (): string[] => [
@@ -434,13 +781,13 @@ const DORMANT_CFG: BriefConfig = { channels: ["whatsapp", "voice"], primary: "wh
 
 export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
   {
-    id: "pre_due_emi_reminder_v3",
-    name: "Pre-due EMI Reminder",
-    tenant: "Suryoday SFB",
-    objective: "Remind borrowers ahead of an upcoming EMI to reduce missed payments.",
-    summary: "WhatsApp reminder before the due date, with a voice fallback for non-responders.",
+    id: "points_expiry_reminder_v3",
+    name: "Points Expiry Reminder",
+    tenant: "Al Tayer · Amber",
+    objective: "Remind members ahead of Amber points expiring to drive a return visit.",
+    summary: "WhatsApp reminder before points expire, with a voice fallback for non-responders.",
     channels: ["whatsapp", "voice"],
-    keywords: ["emi", "payment", "due", "loan", "reminder", "repayment", "collection", "installment", "instalment"],
+    keywords: ["points", "expiry", "expire", "reminder", "loyalty", "amber", "rewards", "redeem", "redemption"],
     assumptions: tenantAssumptions(),
     openVars: [
       { key: "segment", kind: "segment", label: "Audience segment", required: true },
@@ -448,16 +795,16 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
       { key: "voiceAgent", kind: "voiceAgent", label: "Voice agent", required: true },
       { key: "fallbackWindow", kind: "duration", label: "Fallback window", default: "1 day", required: true },
     ],
-    build: emiTemplateBuild,
+    build: pointsExpiryTemplateBuild,
     samples: {
-      whatsapp: "Hi {{1}}, your EMI of {{2}} is due soon. Tap to pay now and avoid late fees.",
-      voice: "\"Hi, this is a quick reminder that your upcoming EMI is due in a few days — would you like to pay now?\"",
+      whatsapp: "Hi {{1}}, you have {{2}} Amber points expiring soon. Tap to redeem before they're gone.",
+      voice: "\"Hi, this is a quick reminder that your Amber points expire in a few days — would you like to redeem them now?\"",
     },
   },
   {
     id: "abandoned_cart_recovery_v2",
     name: "Abandoned Cart Recovery",
-    tenant: "StyleZen",
+    tenant: "Al Tayer",
     objective: "Win back shoppers who left items in their cart with a WhatsApp nudge and a voice fallback.",
     summary: "WhatsApp recovery message, falling back to an AI voice call if WhatsApp isn't delivered.",
     channels: ["whatsapp", "voice"],
@@ -468,18 +815,18 @@ export const CAMPAIGN_TEMPLATES: CampaignTemplate[] = [
     samples: { whatsapp: CHANNEL_SAMPLE.whatsapp, voice: CHANNEL_SAMPLE.voice },
   },
   {
-    id: "dormant_reactivation_v1",
-    name: "Dormant Reactivation",
-    tenant: "Pi Commerce",
-    objective: "Re-engage customers inactive for 90+ days with WhatsApp and a voice win-back.",
-    summary: "WhatsApp re-engagement, with a voice win-back call for high-value dormant users.",
+    id: "lapsed_reactivation_v1",
+    name: "Lapsed Member Reactivation",
+    tenant: "Al Tayer · Amber",
+    objective: "Re-engage members inactive for 90+ days with WhatsApp and a voice win-back.",
+    summary: "WhatsApp re-engagement, with a voice win-back call for high-value lapsed members.",
     channels: ["whatsapp", "voice"],
-    keywords: ["dormant", "inactive", "reactivat", "reactivation", "win back", "winback", "lapsed", "churn", "re-engage", "reengage"],
+    keywords: ["lapsed", "inactive", "reactivat", "reactivation", "win back", "winback", "dormant", "churn", "re-engage", "reengage"],
     assumptions: tenantAssumptions(),
     openVars: channelOpenVars(DORMANT_CFG),
-    build: (resolved) => buildFromChannels("Dormant Reactivation", DORMANT_CFG, resolved),
+    build: (resolved) => buildFromChannels("Lapsed Member Reactivation", DORMANT_CFG, resolved),
     samples: {
-      whatsapp: "Hi {{1}}, we've missed you! Here's {{2}} to welcome you back.",
+      whatsapp: "Hi {{1}}, we've missed you! Here's {{2}} to welcome you back to Amber.",
       voice: CHANNEL_SAMPLE.voice,
     },
   },
@@ -524,8 +871,8 @@ export type BriefPlan = {
 export function briefName(text: string): string {
   const t = (text || "").toLowerCase();
   if (t.includes("cart") || t.includes("checkout") || t.includes("basket")) return "Abandoned Cart Recovery";
-  if (t.includes("dormant") || t.includes("inactive") || t.includes("reactivat") || t.includes("win back") || t.includes("winback") || t.includes("lapsed")) return "Dormant Reactivation";
-  if (t.includes("emi") || t.includes("payment") || t.includes("due") || t.includes("repayment")) return "Payment Reminder";
+  if (t.includes("dormant") || t.includes("inactive") || t.includes("reactivat") || t.includes("win back") || t.includes("winback") || t.includes("lapsed")) return "Lapsed Member Reactivation";
+  if (t.includes("points") || t.includes("expiry") || t.includes("expire") || t.includes("redeem")) return "Points Expiry Reminder";
   if (t.includes("welcome") || t.includes("onboard")) return "Welcome Journey";
   return "New Campaign";
 }
@@ -540,6 +887,7 @@ export function analyzeBrief(text: string): BriefConfig {
   const detected: Channel[] = [];
   if (/whats\s?app|\bwa\b/.test(t)) detected.push("whatsapp");
   if (/voice|\bcall\b|calling|ivr|phone\b|ai\s?agent/.test(t)) detected.push("voice");
+  const channelsNamed = detected.length > 0;
 
   // Channels this workspace can't run, but the brief asked for — surfaced as a
   // "detected but unavailable" note rather than silently dropped.
@@ -551,6 +899,14 @@ export function analyzeBrief(text: string): BriefConfig {
 
   // A/B-test framing: split the audience to compare the two channels.
   const experiment = /a\/b|a-b|ab test|split test|experiment|test two|two variants|head\s?to\s?head/.test(t);
+
+  // Conditional-branch framing: route the audience down a Match / Else branch on an
+  // attribute ("if VIP send …", "based on tier", "high-value customers get …"). Distinct
+  // from a fallback (which keys on NON-DELIVERY): a conditional keys on an audience
+  // attribute. Mutually exclusive with an A/B experiment.
+  const conditional =
+    !experiment &&
+    /\bbased on\b|\bdepending on\b|\bconditional\b|\bbranch\b|\botherwise\b|\belse\s+(?:send|use|route|get|reach|go)|\bif\b[^.]*\b(vip|high.?value|high.?spend|big.?spend|top.?tier|premium|elite|gold|platinum|loyal|tier|spent|spend|over|above|more than|greater|under|below|less than|cart|order|points|engag)\b/.test(t);
 
   if (detected.length === 0) detected.push("whatsapp");
   // An experiment needs two arms — add the other channel if only one was named.
@@ -564,7 +920,7 @@ export function analyzeBrief(text: string): BriefConfig {
   // A fallback is only assumed when the brief actually calls one out (and not in
   // an experiment). Multiple channels with no fallback → parallel/split, not a chain.
   const mentionsFallback = /fall\s?back|if .*(?:fail|not delivered|undelivered|no reply|doesn'?t)/.test(t);
-  if (!experiment && mentionsFallback && detected.length >= 2) {
+  if (!experiment && !conditional && mentionsFallback && detected.length >= 2) {
     // Pin the fallback channel from explicit phrasing: prefer "<channel> fallback"
     // (channel right before the word), then "fallback to/on/via <channel>".
     const toChannel = (s: string): Channel => (/whats/.test(s) ? "whatsapp" : "voice");
@@ -585,26 +941,33 @@ export function analyzeBrief(text: string): BriefConfig {
     primary,
     fallback,
     fallbackWait: "1 day",
+    channelsNamed,
     ...(unavailable.length ? { unavailable } : {}),
     ...(experiment ? { experiment: true } : {}),
+    ...(conditional ? { conditional: true } : {}),
   };
 }
 
 /** Build a brief plan from confirmed channel config. Gaps surface in the Resolve card. */
 export function planFromBrief(text: string, cfg: BriefConfig): BriefPlan {
   const name = briefName(text);
-  const isParallel = !cfg.fallback && cfg.channels.length > 1;
-  const plan = isParallel
-    ? buildParallelChannels(name, cfg, {})
-    : buildFromChannels(name, cfg, {});
+  const isParallel = !cfg.conditional && !cfg.fallback && cfg.channels.length > 1;
+  const plan = cfg.conditional
+    ? buildConditionalChannels(name, cfg, {})
+    : isParallel
+      ? buildParallelChannels(name, cfg, {})
+      : buildFromChannels(name, cfg, {});
   const line = channelsSummary(cfg);
+  const condElse = cfg.channels.find((c) => c !== cfg.primary);
   const assumptions = [
     ...(cfg.fallback ? [`Fallback wait defaulted to ${durationLabel(cfg.fallbackWait)}`] : []),
-    ...(cfg.experiment
-      ? [`A/B test defaulted to a 50/50 split between ${cfg.channels.map((c) => CHANNEL_META[c].label).join(" & ")}`]
-      : isParallel
-        ? [`${cfg.channels.map((c) => CHANNEL_META[c].label).join(" & ")} both target the full segment until you set a split rule`]
-        : []),
+    ...(cfg.conditional
+      ? [`Match branch defaults to ${CHANNEL_META[cfg.primary].label}; Else to ${condElse ? CHANNEL_META[condElse].label : "End"} until you set the branch rule`]
+      : cfg.experiment
+        ? [`A/B test defaulted to a 50/50 split between ${cfg.channels.map((c) => CHANNEL_META[c].label).join(" & ")}`]
+        : isParallel
+          ? [`${cfg.channels.map((c) => CHANNEL_META[c].label).join(" & ")} both target the full segment until you set a split rule`]
+          : []),
     `Sending window ${TENANT_DEFAULTS.windowStart}–${TENANT_DEFAULTS.windowEnd} ${TENANT_DEFAULTS.timezone}`,
     `Frequency cap ${TENANT_DEFAULTS.freqCap}`,
   ];
@@ -614,7 +977,7 @@ export function planFromBrief(text: string, cfg: BriefConfig): BriefPlan {
     channelsLine: line,
     channels: cfg.channels,
     assumptions,
-    gaps: channelOpenVars(cfg),
+    gaps: [...channelOpenVars(cfg), ...timingVars()],
   };
 }
 
@@ -629,6 +992,7 @@ export function applyResolved(plan: AskPiPlan, resolved: Record<string, string>)
   const sender = findSmsSender(resolved.smsSender);
   const agent = findVoiceAgent(resolved.voiceAgent);
   const fw = resolved.fallbackWindow;
+  const win = parseSendWindow(resolved.sendWindow ?? "");
 
   const nodes = plan.nodes.map((n) => {
     const d = n.data;
@@ -643,9 +1007,14 @@ export function applyResolved(plan: AskPiPlan, resolved: Record<string, string>)
       return { ...n, data: { ...d, subtitle: `Sender: ${sender.senderId}`, valid: true, error: undefined,
         config: { ...d.config, senderId: sender.senderId, peId: sender.peId } } };
     }
-    if (agent && d.kind === "voiceCall") {
-      return { ...n, data: { ...d, subtitle: `Agent: ${agent.name}`, valid: true, error: undefined,
-        config: { ...d.config, agent: agent.name } } };
+    if ((agent || win) && d.kind === "voiceCall") {
+      return { ...n, data: { ...d,
+        subtitle: agent ? `Agent: ${agent.name}` : d.subtitle,
+        valid: agent ? true : d.valid,
+        error: agent ? undefined : d.error,
+        config: { ...d.config,
+          ...(agent ? { agent: agent.name } : {}),
+          ...(win ? { callStart: win.start, callEnd: win.end } : {}) } } };
     }
     if (fw && d.kind === "delay") {
       const { value, unit } = parseDuration(fw);
@@ -865,7 +1234,7 @@ export function runChecks(
   // 4c. Audience split — required when the journey declares an attribute split
   // (parallel channels, no fallback). Numeric attributes need a threshold;
   // categorical attributes need a chosen value.
-  if (vars.some((v) => v.kind === "splitAttribute")) {
+  if (vars.some((v) => v.key === "splitAttribute")) {
     const attr = findSplitAttribute(resolved.splitAttribute);
     const priorityLabel = channels[0] ? CHANNEL_META[channels[0]].label : "priority channel";
     const otherLabel = channels[1] ? CHANNEL_META[channels[1]].label : "other channel";
@@ -888,16 +1257,59 @@ export function runChecks(
     }
   }
 
-  // 5. Sending window respects India TRAI DND quiet hours (9pm–9am).
+  // 4d. Conditional branch — required when the journey declares a condition
+  // attribute (audience routed Match / Else on an attribute). Numeric attributes
+  // need a threshold, categorical attributes a value; the Match / Else routing
+  // (a channel or End) is reported for confirmation.
+  if (vars.some((v) => v.key === "conditionAttribute")) {
+    const attr = findSplitAttribute(resolved.conditionAttribute);
+    const routeLabel = (id: string | undefined, fallback: string): string => {
+      if (id === "end") return "End";
+      const ch = (Object.keys(CHANNEL_NODE_ID) as Channel[]).find((c) => CHANNEL_NODE_ID[c] === id);
+      return ch ? CHANNEL_META[ch].label : fallback;
+    };
+    const otherCh = channels.find((c) => c !== channels[0]);
+    const matchTo = routeLabel(resolved.branchMatch, channels[0] ? CHANNEL_META[channels[0]].label : "Match branch");
+    const elseTo = routeLabel(resolved.branchElse, otherCh ? CHANNEL_META[otherCh].label : "End");
+    if (!attr) {
+      checks.push({ id: "condition", label: "Conditional branch", status: "block", detail: "Pick an attribute to branch the audience on." });
+    } else if (attr.type === "categorical") {
+      const val = resolved.conditionValue;
+      checks.push(
+        !val
+          ? { id: "condition", label: "Conditional branch", status: "block", detail: `Pick which ${attr.label.toLowerCase()} takes the Match branch.` }
+          : { id: "condition", label: "Conditional branch", status: "pass", detail: `${attr.label} = ${val} → ${matchTo}; everyone else → ${elseTo}.` },
+      );
+    } else {
+      const thr = resolved.conditionThreshold;
+      checks.push(
+        !thr || Number.isNaN(Number(thr))
+          ? { id: "condition", label: "Conditional branch", status: "block", detail: "Set a numeric threshold for the Match branch." }
+          : { id: "condition", label: "Conditional branch", status: "pass", detail: `${attr.label} ≥ ${attr.unit}${thr} → ${matchTo}; below → ${elseTo}.` },
+      );
+    }
+  }
+
+  // 5. Sending window respects quiet hours (9pm–9am). Uses the resolved window if
+  // the user edited it on the Resolve card, else the tenant default.
+  const sendWindow = resolved.sendWindow?.trim() || DEFAULT_SEND_WINDOW;
+  const windowOk = windowWithinQuietHours(sendWindow);
   checks.push({
     id: "window",
-    label: "Sending window & DND",
-    status: "pass",
-    detail: `${TENANT_DEFAULTS.windowStart}–${TENANT_DEFAULTS.windowEnd} ${TENANT_DEFAULTS.timezone} — within 9am–9pm quiet-hours rule.`,
+    label: "Sending window & quiet hours",
+    status: windowOk ? "pass" : "block",
+    detail: windowOk
+      ? `${sendWindow} ${TENANT_DEFAULTS.timezone} — within 9am–9pm quiet-hours rule.`
+      : `${sendWindow} ${TENANT_DEFAULTS.timezone} breaches quiet hours — keep sends within 09:00–21:00.`,
   });
 
-  // 6. Frequency cap.
-  checks.push({ id: "freqcap", label: "Frequency cap", status: "pass", detail: `${TENANT_DEFAULTS.freqCap} per contact.` });
+  // 6. Frequency cap. "No cap" warns (contacts could be over-messaged).
+  const freqCap = resolved.frequencyCap?.trim() || TENANT_DEFAULTS.freqCap;
+  checks.push(
+    /no cap/i.test(freqCap)
+      ? { id: "freqcap", label: "Frequency cap", status: "warn", detail: "No frequency cap set — contacts could be messaged repeatedly." }
+      : { id: "freqcap", label: "Frequency cap", status: "pass", detail: `${freqCap} per contact.` },
+  );
 
   return checks;
 }

@@ -23,8 +23,8 @@ export type Lead = {
   updatedDate: string;     // ISO YYYY-MM-DD, used by Date Range filter
 };
 
-const FIRST = ["Arjun","Priya","Rahul","Anita","Vikram","Sneha","Karan","Meera","Rohan","Divya","Aditya","Pooja","Sanjay","Neha","Ishan","Tara","Manish","Ritu","Aman","Kavya","Yash","Simran","Nikhil","Anjali"];
-const LAST  = ["Sharma","Patel","Kumar","Reddy","Iyer","Khan","Singh","Gupta","Mehta","Joshi","Nair","Das","Verma","Bose","Rao","Pillai","Banerjee","Kapoor","Malhotra"];
+const FIRST = ["Layla","Omar","Aisha","Yousef","Sara","Khalid","Fatima","Ahmed","Mariam","Hassan","Noor","Saeed","Hana","Tariq","Reem","Faisal","Dana","Ali","Salma","Rashid","Lina","Majid","Amira","Zayed"];
+const LAST  = ["Al Mansoori","Haddad","Khan","Al Nuaimi","Nasser","Al Maktoum","Ali","Hassan","Al Shamsi","Khalil","Al Qassimi","Saleh","Najjar","Al Falasi","Rahman","Aziz","Karimi","Sultan","Al Hashimi"];
 
 function rng(seed: string) {
   let h = 2166136261;
@@ -69,7 +69,7 @@ export function generateLeads(run: RunRow, total = 3990): Lead[] {
     const status = statuses[Math.floor(rand() * statuses.length)];
     const first = FIRST[Math.floor(rand() * FIRST.length)];
     const last  = LAST[Math.floor(rand() * LAST.length)];
-    const phone = `+91 9${Math.floor(100000000 + rand() * 899999999)}`;
+    const phone = `+971 5${Math.floor(10000000 + rand() * 89999999)}`;
     leads.push({
       id: `L-${String(10000 + i).padStart(5, "0")}`,
       name: `${first} ${last}`,

@@ -112,7 +112,7 @@ function Billing() {
     <div className="grid grid-cols-3 gap-4">
       <div className="col-span-2 rounded-xl border border-border bg-card p-5">
         <p className="text-[11px] uppercase tracking-wider text-muted-foreground">Current plan</p>
-        <h2 className="mt-1 text-xl font-semibold">Enterprise · ₹4,80,000 / yr</h2>
+        <h2 className="mt-1 text-xl font-semibold">Enterprise · AED 96,000 / yr</h2>
         <p className="mt-1 text-[12.5px] text-muted-foreground">Includes unlimited campaigns, 10 seats, dedicated CSM.</p>
         <div className="mt-4 grid grid-cols-3 gap-3 border-t border-border pt-4">
           <Quota label="AI credits" used={62} total={100} unit="%" />

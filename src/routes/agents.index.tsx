@@ -69,12 +69,11 @@ type AgentStatus = "live" | "draft" | "paused" | "archived";
 type Agent = { id: string; name: string; type: AgentType; status: AgentStatus; campaignNames: string[]; convs: string };
 
 const INITIAL_AGENTS: Agent[] = [
-  { id: "a_concierge", name: "Pi Concierge", type: "chat", status: "live", convs: "12.4K", campaignNames: ["New Trader Onboarding", "Dormant Trader Reactivation", "KYC Drop-off Recovery", "High-Value Win-Back", "Festive Cashback Push"] },
-  { id: "a_voice_react", name: "Reactivation Voice", type: "voice", status: "live", convs: "3.1K", campaignNames: ["Dormant Trader Reactivation", "High-Value Win-Back"] },
-  { id: "a_kyc", name: "KYC Helper", type: "chat", status: "live", convs: "9.0K", campaignNames: ["KYC Drop-off Recovery", "New Trader Onboarding", "Dormant Trader Reactivation"] },
-  { id: "a_pricing", name: "Pricing Q&A", type: "chat", status: "draft", convs: "—", campaignNames: [] },
-  { id: "a_winback", name: "Win-back Voice", type: "voice", status: "paused", convs: "412", campaignNames: ["High-Value Win-Back"] },
-  { id: "a_support", name: "L1 Support", type: "chat", status: "live", convs: "21.7K", campaignNames: ["New Trader Onboarding", "KYC Drop-off Recovery", "Festive Cashback Push", "Dormant Trader Reactivation"] },
+  { id: "a_concierge", name: "Pi Concierge", type: "chat", status: "live", convs: "12.4K", campaignNames: ["Amber Member Onboarding", "Lapsed VIP Re-engagement", "Points Expiry Reminder", "Elite Tier Win-Back", "Festive Cashback Push"] },
+  { id: "a_voice_react", name: "Reactivation Voice", type: "voice", status: "live", convs: "3.1K", campaignNames: ["Lapsed VIP Re-engagement", "Elite Tier Win-Back"] },
+  { id: "a_pricing", name: "Pricing Q&A", type: "chat", status: "live", convs: "1.8K", campaignNames: ["Festive Cashback Push"] },
+  { id: "a_winback", name: "Win-back Voice", type: "voice", status: "live", convs: "412", campaignNames: ["Elite Tier Win-Back"] },
+  { id: "a_support", name: "L1 Support", type: "chat", status: "live", convs: "21.7K", campaignNames: ["Amber Member Onboarding", "Points Expiry Reminder", "Festive Cashback Push", "Lapsed VIP Re-engagement"] },
 ];
 
 const AGENT_STATUSES: AgentStatus[] = ["live", "draft", "paused", "archived"];

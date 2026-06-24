@@ -600,7 +600,7 @@ export function AskPiConversation({
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleIntentSubmit(); }
               }}
-              placeholder="e.g. Recover abandoned carts on WhatsApp with an SMS fallback"
+              placeholder="e.g. Recover abandoned carts on WhatsApp with a voice win-back fallback"
               className="max-h-28 min-w-0 flex-1 resize-none bg-transparent py-1 text-[13px] text-foreground placeholder:text-muted-foreground/70 focus:outline-none"
             />
             <button

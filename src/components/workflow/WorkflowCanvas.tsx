@@ -74,6 +74,7 @@ export function WorkflowCanvas({
   onDirty,
   autoStartAskPi = false,
   isNew = false,
+  agentChat = false,
   onAiBuiltName,
   seedName,
   seedDescription,
@@ -85,6 +86,9 @@ export function WorkflowCanvas({
   onDirty?: () => void;
   autoStartAskPi?: boolean;
   isNew?: boolean;
+  /** When true, Ask Pi opens straight into the live agent chat (the agent-led
+   *  template flow) instead of the deterministic build wizard. */
+  agentChat?: boolean;
   onAiBuiltName?: (name: string) => void;
   seedName?: string;
   seedDescription?: string;
@@ -318,7 +322,7 @@ export function WorkflowCanvas({
           (not new), the composer is no longer available. */}
       {isNew && (
         <AiComposer
-          mode="wizard"
+          mode={agentChat ? "chat" : "wizard"}
           nudge={{ label: "Ask Pi to build your campaign", active: autoStartAskPi }}
           autoOpenWizard={askPiOpen}
           seedName={seedName}

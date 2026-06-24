@@ -10,10 +10,21 @@ import { COPILOT_ENDPOINT } from "@/lib/copilot/endpoint";
 
 export const Route = createFileRoute("/campaigns/$id")({
   component: CampaignBuilder,
-  validateSearch: (search: Record<string, unknown>): { name?: string; description?: string; objective?: string } => ({
+  validateSearch: (search: Record<string, unknown>): { name?: string; description?: string; objective?: string; agent?: boolean } => ({
     name: typeof search.name === "string" ? search.name : undefined,
     description: typeof search.description === "string" ? search.description : undefined,
     objective: typeof search.objective === "string" ? search.objective : undefined,
+    // `?agent=1` (or `?agent=chat` / `?agent=true`) opens Ask Pi straight into
+    // the live agent chat instead of the deterministic build wizard — useful for
+    // testing the agent-led template flow locally. The router's search parser
+    // JSON-coerces `agent=1` to the number 1, so accept that form too.
+    agent:
+      search.agent === 1 ||
+      search.agent === "1" ||
+      search.agent === "chat" ||
+      search.agent === true
+        ? true
+        : undefined,
   }),
   head: ({ params }) => ({
     meta: [
@@ -25,7 +36,7 @@ export const Route = createFileRoute("/campaigns/$id")({
 
 function CampaignBuilder() {
   const { id } = Route.useParams();
-  const { name: seedName, description: seedDescription, objective: seedObjective } = Route.useSearch();
+  const { name: seedName, description: seedDescription, objective: seedObjective, agent: agentChat } = Route.useSearch();
   const navigate = useNavigate();
   const isNew = id === "new";
   const example = EXAMPLE_CAMPAIGNS[id];
@@ -33,7 +44,7 @@ function CampaignBuilder() {
   const [name, setName] = useState(
     isNew
       ? (seedName?.trim() || "Untitled campaign")
-      : example?.name ?? "Dormant Trader Reactivation",
+      : example?.name ?? "Lapsed VIP Re-engagement",
   );
   const [status, setStatus] = useState<CampaignStatus>(
     isNew ? "draft" : example?.status ?? "draft",
@@ -111,6 +122,7 @@ function CampaignBuilder() {
               onDirty={handleDirty}
               autoStartAskPi={isNew}
               isNew={isNew}
+              agentChat={isNew && agentChat === true}
               onAiBuiltName={(n) => { setName(n); setDirty(true); }}
               seedName={isNew ? seedName : undefined}
               seedDescription={isNew ? seedDescription : undefined}

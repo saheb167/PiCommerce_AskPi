@@ -30,7 +30,7 @@ export function AppSidebar() {
         </div>
         <div className="min-w-0">
           <p className="truncate text-[13px] font-semibold leading-tight">Pi Commerce</p>
-          <p className="truncate text-[10.5px] text-muted-foreground">ABC Enterprises</p>
+          <p className="truncate text-[10.5px] text-muted-foreground">Al Tayer · Amber · UAE (AED)</p>
         </div>
       </div>
 

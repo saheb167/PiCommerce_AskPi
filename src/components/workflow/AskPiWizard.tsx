@@ -17,10 +17,10 @@ const QUESTIONS: Question[] = [
     title: "What outcome should this campaign drive?",
     subtitle: "Pi will pick the right journey shape for this goal.",
     options: [
-      { value: "reactivation", label: "Reactivate dormant users", hint: "Wake up inactive accounts (>30d)" },
-      { value: "onboarding",   label: "Onboard new signups",      hint: "Drive first deposit / first action" },
-      { value: "winback",      label: "Win-back high-value churn", hint: "Premium retention play" },
-      { value: "kyc",          label: "Recover KYC drop-offs",    hint: "Compliance completion nudge" },
+      { value: "reactivation", label: "Reactivate lapsed members", hint: "Wake up inactive members (>30d)" },
+      { value: "onboarding",   label: "Onboard new members",       hint: "Drive Amber enrolment / first visit" },
+      { value: "winback",      label: "Win-back Elite churn",       hint: "Elite-tier retention play" },
+      { value: "kyc",          label: "Recover points-expiry drop-offs", hint: "Redemption completion nudge" },
     ],
   },
   {
@@ -29,7 +29,7 @@ const QUESTIONS: Question[] = [
     subtitle: "Minimum audience config — you can refine later.",
     options: [
       { value: "csv",     label: "Upload CSV",     hint: "12,402 contacts ready" },
-      { value: "segment", label: "Saved segment",  hint: "Dormant Traders · 90d" },
+      { value: "segment", label: "Saved segment",  hint: "Lapsed Members · 90d" },
       { value: "api",     label: "Runtime API",    hint: "Pushed via webhook" },
     ],
   },
@@ -40,7 +40,7 @@ const QUESTIONS: Question[] = [
     options: [
       { value: "whatsapp", label: "WhatsApp",       hint: "Template: reactivate_v3" },
       { value: "voice",    label: "AI Voice Agent", hint: "Agent: Aria · conversational" },
-      { value: "sms",      label: "SMS",            hint: "Sender ID: PICOMM" },
+      { value: "sms",      label: "SMS",            hint: "Sender ID: AMBER" },
     ],
   },
   {
@@ -72,15 +72,15 @@ const QUESTIONS: Question[] = [
 type ChannelKind = "whatsapp" | "voice" | "sms";
 
 const GOAL_NAMES: Record<string, string> = {
-  reactivation: "Dormant Reactivation",
-  onboarding:   "New Trader Onboarding",
-  winback:      "High-Value Win-Back",
-  kyc:          "KYC Drop-off Recovery",
+  reactivation: "Lapsed VIP Re-engagement",
+  onboarding:   "Amber Member Onboarding",
+  winback:      "Elite Tier Win-Back",
+  kyc:          "Points Expiry Reminder",
 };
 
 const AUDIENCE_SUB: Record<string, string> = {
   csv:     "CSV · 12,402 contacts",
-  segment: "Segment · Dormant 90d",
+  segment: "Segment · Lapsed 90d",
   api:     "Runtime API · webhook",
 };
 
@@ -92,8 +92,8 @@ const CHANNEL_TITLE: Record<ChannelKind, string> = {
 
 const CHANNEL_SUB: Record<ChannelKind, string> = {
   whatsapp: "Template: reactivate_v3",
-  voice:    "Agent: Aria · Hindi+English",
-  sms:      "Sender ID: PICOMM",
+  voice:    "Agent: Aria · Arabic+English",
+  sms:      "Sender ID: AMBER",
 };
 
 const CHANNEL_NODE_KIND: Record<ChannelKind, WorkflowNodeData["kind"]> = {

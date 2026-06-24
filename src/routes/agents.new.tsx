@@ -60,10 +60,10 @@ type Draft = {
 const TONES = ["Warm", "Concise", "Formal", "Playful"] as const;
 
 const VOICES = [
-  { id: "aria", name: "Aria", desc: "Warm female · English + Hindi", accent: "Neutral Indian" },
-  { id: "kabir", name: "Kabir", desc: "Confident male · Hindi + English", accent: "North Indian" },
+  { id: "aria", name: "Aria", desc: "Warm female · English + Arabic", accent: "Gulf Arabic" },
+  { id: "kabir", name: "Layla", desc: "Confident female · Arabic + English", accent: "Levantine" },
   { id: "maya", name: "Maya", desc: "Friendly female · English", accent: "Global" },
-  { id: "veer", name: "Veer", desc: "Energetic male · Hindi", accent: "Mumbai" },
+  { id: "veer", name: "Omar", desc: "Energetic male · Arabic", accent: "Emirati" },
 ] as const;
 
 const INITIAL: Draft = {
@@ -77,14 +77,14 @@ const INITIAL: Draft = {
     "Understand why the customer reached out, resolve it accurately on the first contact, and route anything high-value to a human.",
   intents: [
     "Resolve a support issue",
-    "Answer a pricing or plan question",
-    "Reactivate a dormant account",
+    "Answer a rewards or order question",
+    "Reactivate a lapsed member",
   ],
-  signals: ["Reason for contact", "Account ID", "Sentiment"],
+  signals: ["Reason for contact", "Member ID", "Sentiment"],
   doText:
-    "• Acknowledge the user's intent before answering\n• Confirm the details you captured back to them\n• Keep answers short and actionable",
+    "• Acknowledge the member's intent before answering\n• Confirm the details you captured back to them\n• Keep answers short and actionable",
   dontText:
-    "• Never make investment recommendations\n• Never mention competitor brands\n• Never promise specific outcomes",
+    "• Never quote prices not in the catalogue\n• Never mention competitor brands\n• Never promise a reward that isn't confirmed",
   systemPrompt: "",
   promptDirty: false,
 };
@@ -319,7 +319,7 @@ function BasicsStep({
         <Textarea
           value={draft.description}
           onChange={(e) => set("description", e.target.value)}
-          placeholder="A calm, knowledgeable concierge for Indian retail traders. Confident but never pushy."
+          placeholder="A calm, knowledgeable concierge for Al Tayer's luxury retail and Amber loyalty members. Confident but never pushy."
           className="min-h-24 resize-none text-sm"
         />
       </Field>
@@ -424,7 +424,7 @@ function PromptStep({
           items={draft.intents}
           onAdd={(v) => addItem("intents", v)}
           onRemove={(v) => removeItem("intents", v)}
-          placeholder="e.g. Reset KYC, Dispute a charge, Upgrade plan"
+          placeholder="e.g. Redeem points, Track an order, Upgrade tier"
         />
       </div>
 

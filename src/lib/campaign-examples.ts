@@ -34,11 +34,11 @@ const EX1_CSV_KEYS = [
   "lifetime_order_value", "discount_value", "preferred_lang",
 ];
 const EX1_CSV_PREVIEW = [
-  ["C-100482", "+91 98xxx 11023", "Aarav", "Electronics", "48,200", "500", "en"],
-  ["C-100517", "+91 98xxx 55218", "Diya", "Fashion", "27,900", "350", "hi"],
-  ["C-100643", "+91 98xxx 90087", "Vihaan", "Groceries", "18,400", "200", "en"],
-  ["C-100719", "+91 98xxx 41552", "Ananya", "Beauty", "62,750", "750", "hi"],
-  ["C-100884", "+91 98xxx 77390", "Kabir", "Electronics", "9,300", "150", "mr"],
+  ["C-100482", "+971 5xxx 11023", "Layla", "Watches", "48,200", "500", "ar"],
+  ["C-100517", "+971 5xxx 55218", "Omar", "Fashion", "27,900", "350", "en"],
+  ["C-100643", "+971 5xxx 90087", "Aisha", "Beauty", "18,400", "200", "ar"],
+  ["C-100719", "+971 5xxx 41552", "Yousef", "Jewellery", "62,750", "750", "en"],
+  ["C-100884", "+971 5xxx 77390", "Sara", "Watches", "9,300", "150", "fr"],
 ];
 
 const EX1_NODES: Node<WorkflowNodeData>[] = [
@@ -52,7 +52,7 @@ const EX1_NODES: Node<WorkflowNodeData>[] = [
       kind: "audience", title: "Audience", subtitle: "CSV · primary key customer_id", valid: true, preset: true,
       config: {
         audienceMode: "csv",
-        fileName: "high_value_traders.csv",
+        fileName: "high_value_members.csv",
         primaryKey: "customer_id",
         phoneCol: "phone",
         csvKeys: EX1_CSV_KEYS,
@@ -105,7 +105,7 @@ const EX1_NODES: Node<WorkflowNodeData>[] = [
         { id: "default", label: "No response", kind: "default" },
       ],
       config: {
-        waNumber: "+91 98100 12345 · PiCommerce",
+        waNumber: "+971 4 123 4567 · Amber",
         waMode: "template",
         waTemplate: "reactivate_v3 · Marketing",
         waVarMap: [
@@ -129,7 +129,7 @@ const EX1_NODES: Node<WorkflowNodeData>[] = [
         { id: "default", label: "No response", kind: "default" },
       ],
       config: {
-        waNumber: "+91 98100 12345 · PiCommerce",
+        waNumber: "+971 4 123 4567 · Amber",
         waMode: "template",
         waTemplate: "winback_v2 · Marketing",
         waVarMap: [
@@ -162,7 +162,7 @@ const EX1_NODES: Node<WorkflowNodeData>[] = [
         ],
         callStart: "09:00",
         callEnd: "20:00",
-        timezone: "Asia/Kolkata (IST)",
+        timezone: "Asia/Dubai (GST)",
         maxAttempts: 3,
         retryInterval: "1 hour",
       },
@@ -177,8 +177,8 @@ const EX1_NODES: Node<WorkflowNodeData>[] = [
         smsType: "Promotional",
         smsFormat: "Text",
         peId: "1101234567890123456",
-        senderId: "PICOMM",
-        smsBody: "Hi {{first_name}}, here's ₹{{discount_value}} off your favourite {{favorite_category}}. Shop now — limited time. — PICOMM",
+        senderId: "AMBER",
+        smsBody: "Hi {{first_name}}, here's AED {{discount_value}} off your favourite {{favorite_category}}. Shop now — limited time. — AMBER",
       },
     },
   },
@@ -242,7 +242,7 @@ const EX2_NODES: Node<WorkflowNodeData>[] = [
   {
     id: "voice1", type: "workflow", position: { x: 484, y: 300 },
     data: {
-      kind: "voiceCall", title: "Voice AI win-back call", subtitle: "Call window 10:00–19:00 IST", valid: true, preset: true,
+      kind: "voiceCall", title: "Voice AI win-back call", subtitle: "Call window 10:00–19:00 GST", valid: true, preset: true,
       config: {
         agent: "Maya · Friendly",
         voiceVarMap: [
@@ -251,7 +251,7 @@ const EX2_NODES: Node<WorkflowNodeData>[] = [
         ],
         callStart: "10:00",
         callEnd: "19:00",
-        timezone: "Asia/Kolkata (IST)",
+        timezone: "Asia/Dubai (GST)",
         maxAttempts: 2,
         retryInterval: "1 hour",
         transforms: [
@@ -295,7 +295,7 @@ const EX2_NODES: Node<WorkflowNodeData>[] = [
         { id: "default", label: "Fallthrough", kind: "default" },
       ],
       config: {
-        waNumber: "+91 98100 12345 · PiCommerce",
+        waNumber: "+971 4 123 4567 · Amber",
         waMode: "template",
         waTemplate: "reactivate_v3 · Marketing",
         waVarMap: [
@@ -324,8 +324,8 @@ const EX2_NODES: Node<WorkflowNodeData>[] = [
         smsType: "Promotional",
         smsFormat: "Text",
         peId: "1101234567890123456",
-        senderId: "PICOMM",
-        smsBody: "Hi {{first_name}}, still thinking about {{last_item}}? Reorder in one tap: {{reorder_url}} — PICOMM",
+        senderId: "AMBER",
+        smsBody: "Hi {{first_name}}, still thinking about {{last_item}}? Reorder in one tap: {{reorder_url}} — AMBER",
       },
     },
   },
@@ -349,7 +349,7 @@ const EX2_NODES: Node<WorkflowNodeData>[] = [
         ],
         callStart: "10:00",
         callEnd: "19:00",
-        timezone: "Asia/Kolkata (IST)",
+        timezone: "Asia/Dubai (GST)",
         maxAttempts: 1,
         retryInterval: "1 hour",
       },
@@ -364,8 +364,8 @@ const EX2_NODES: Node<WorkflowNodeData>[] = [
         smsType: "Promotional",
         smsFormat: "Text",
         peId: "1101234567890123456",
-        senderId: "PICOMM",
-        smsBody: "Hi {{first_name}}, here's a little something for whenever you're ready to come back. — PICOMM",
+        senderId: "AMBER",
+        smsBody: "Hi {{first_name}}, here's a little something for whenever you're ready to come back. — AMBER",
       },
     },
   },
@@ -375,7 +375,7 @@ const EX2_NODES: Node<WorkflowNodeData>[] = [
     data: {
       kind: "whatsapp", title: "Chat AI · async", subtitle: "WhatsApp · no-connect path", valid: true, preset: true,
       config: {
-        waNumber: "+91 98100 12345 · PiCommerce",
+        waNumber: "+971 4 123 4567 · Amber",
         waMode: "template",
         waTemplate: "onboarding_v1 · Utility",
         waVarMap: [
@@ -411,6 +411,261 @@ const EX2_EDGES: Edge[] = [
   { id: "ex2-e17", source: "chatNC", target: "end", type: EDGE },
 ];
 
+/* ============================================================== */
+/* Example 3 — Retail loyalty program (tiered journey)           */
+/* Tier split → per-tier channel → disposition fallback,         */
+/* conversion → WhatsApp link, opt-out → update audience         */
+/* ============================================================== */
+
+const EX3_FIELDS = [
+  { id: "f1", name: "customer_id", type: "String" as const },
+  { id: "f2", name: "phone", type: "String" as const },
+  { id: "f3", name: "first_name", type: "String" as const },
+  { id: "f4", name: "loyalty_tier", type: "String" as const },
+  { id: "f5", name: "points_balance", type: "Number" as const },
+  { id: "f6", name: "tier_offer", type: "String" as const },
+  { id: "f7", name: "reward_url", type: "String" as const },
+  { id: "f8", name: "preferred_lang", type: "String" as const },
+];
+
+/** Disposition outputs shared by every channel node: convert / opt-out / fallthrough-to-fallback. */
+const EX3_DISPO_OUTPUTS = [
+  { id: "converted", label: "Converted", kind: "exit" as const },
+  { id: "opt_out", label: "Opted out", kind: "exit" as const },
+  { id: "default", label: "No response → fallback", kind: "default" as const },
+];
+const EX3_DISPO_PATHS = [
+  { id: "converted", label: "Converted", variable: "conversion", op: "equals", value: "true" },
+  { id: "opt_out", label: "Opted out", variable: "opt_out", op: "equals", value: "true" },
+];
+const EX3_WA_NUMBER = "+971 4 123 4567 · Amber";
+
+const EX3_NODES: Node<WorkflowNodeData>[] = [
+  {
+    id: "start", type: "workflow", position: { x: 460, y: 0 },
+    data: { kind: "start", title: "Start", locked: true, valid: true, preset: true },
+  },
+  {
+    id: "audience", type: "workflow", position: { x: 444, y: 120 },
+    data: {
+      kind: "audience", title: "Audience", subtitle: "Loyalty members · Runtime API", valid: true, preset: true,
+      config: {
+        audienceMode: "api",
+        payloadType: "list",
+        fields: EX3_FIELDS,
+        phoneField: "phone",
+      },
+    },
+  },
+  {
+    id: "tier", type: "workflow", position: { x: 444, y: 280 },
+    data: {
+      kind: "conditional", title: "Loyalty tier", subtitle: "Route on loyalty_tier", valid: true, preset: true,
+      outputs: [
+        { id: "elite", label: "Elite", kind: "branch" },
+        { id: "premium", label: "Premium", kind: "branch" },
+        { id: "member", label: "Member", kind: "branch" },
+      ],
+      config: {
+        branches: [
+          { id: "elite", label: "Elite", variable: "loyalty_tier", op: "equals", value: "elite" },
+          { id: "premium", label: "Premium", variable: "loyalty_tier", op: "equals", value: "premium" },
+          { id: "member", label: "Member", variable: "loyalty_tier", op: "equals", value: "member" },
+        ],
+      },
+    },
+  },
+
+  // ---- Elite track: Voice AI, fallback = Voice AI again ----
+  {
+    id: "voiceElite", type: "workflow", position: { x: 80, y: 480 },
+    data: {
+      kind: "voiceCall", title: "Voice AI · Elite", subtitle: "Concierge reward call", valid: true, preset: true,
+      outputs: EX3_DISPO_OUTPUTS,
+      config: {
+        agent: "Aria · Concierge",
+        voiceVarMap: [
+          { v: "{{name}}", def: "contact.first_name" },
+          { v: "{{phone}}", def: "contact.phone" },
+        ],
+        callStart: "10:00",
+        callEnd: "19:00",
+        timezone: "Asia/Dubai (GST)",
+        maxAttempts: 2,
+        retryInterval: "1 hour",
+        paths: EX3_DISPO_PATHS,
+      },
+    },
+  },
+  {
+    id: "voiceEliteRetry", type: "workflow", position: { x: 80, y: 720 },
+    data: {
+      kind: "voiceCall", title: "Voice AI · Elite retry", subtitle: "Fallback — voice again", valid: true, preset: true,
+      outputs: EX3_DISPO_OUTPUTS,
+      config: {
+        agent: "Aria · Concierge",
+        voiceVarMap: [
+          { v: "{{name}}", def: "contact.first_name" },
+          { v: "{{phone}}", def: "contact.phone" },
+        ],
+        callStart: "10:00",
+        callEnd: "19:00",
+        timezone: "Asia/Dubai (GST)",
+        maxAttempts: 1,
+        retryInterval: "2 hours",
+        paths: EX3_DISPO_PATHS,
+      },
+    },
+  },
+
+  // ---- Premium track: WhatsApp, fallback = Voice AI now ----
+  {
+    id: "waPremium", type: "workflow", position: { x: 444, y: 480 },
+    data: {
+      kind: "whatsapp", title: "Chat AI · Premium", subtitle: "WhatsApp · tier offer", valid: true, preset: true,
+      outputs: EX3_DISPO_OUTPUTS,
+      config: {
+        waNumber: EX3_WA_NUMBER,
+        waMode: "template",
+        waTemplate: "loyalty_premium_v2 · Marketing",
+        waVarMap: [
+          { v: "{{1}}", def: "contact.first_name" },
+          { v: "{{2}}", def: "tier_offer" },
+        ],
+        paths: EX3_DISPO_PATHS,
+      },
+    },
+  },
+  {
+    id: "voicePremium", type: "workflow", position: { x: 444, y: 720 },
+    data: {
+      kind: "voiceCall", title: "Voice AI · Premium", subtitle: "Fallback — voice now", valid: true, preset: true,
+      outputs: EX3_DISPO_OUTPUTS,
+      config: {
+        agent: "Maya · Friendly",
+        voiceVarMap: [
+          { v: "{{name}}", def: "contact.first_name" },
+          { v: "{{phone}}", def: "contact.phone" },
+        ],
+        callStart: "10:00",
+        callEnd: "19:00",
+        timezone: "Asia/Dubai (GST)",
+        maxAttempts: 1,
+        retryInterval: "1 hour",
+        paths: EX3_DISPO_PATHS,
+      },
+    },
+  },
+
+  // ---- Member track: WhatsApp, fallback = WhatsApp only ----
+  {
+    id: "waMember", type: "workflow", position: { x: 820, y: 480 },
+    data: {
+      kind: "whatsapp", title: "Chat AI · Member", subtitle: "WhatsApp · tier offer", valid: true, preset: true,
+      outputs: EX3_DISPO_OUTPUTS,
+      config: {
+        waNumber: EX3_WA_NUMBER,
+        waMode: "template",
+        waTemplate: "loyalty_member_v2 · Marketing",
+        waVarMap: [
+          { v: "{{1}}", def: "contact.first_name" },
+          { v: "{{2}}", def: "tier_offer" },
+        ],
+        paths: EX3_DISPO_PATHS,
+      },
+    },
+  },
+  {
+    id: "waMemberRetry", type: "workflow", position: { x: 820, y: 720 },
+    data: {
+      kind: "whatsapp", title: "Chat AI · Member retry", subtitle: "Fallback — WhatsApp only", valid: true, preset: true,
+      outputs: EX3_DISPO_OUTPUTS,
+      config: {
+        waNumber: EX3_WA_NUMBER,
+        waMode: "template",
+        waTemplate: "loyalty_member_reminder_v1 · Utility",
+        waVarMap: [
+          { v: "{{1}}", def: "contact.first_name" },
+          { v: "{{2}}", def: "tier_offer" },
+        ],
+        paths: EX3_DISPO_PATHS,
+      },
+    },
+  },
+
+  // ---- Shared terminals: conversion → WhatsApp link, opt-out → update audience ----
+  {
+    id: "waLink", type: "workflow", position: { x: 240, y: 960 },
+    data: {
+      kind: "whatsapp", title: "Send WhatsApp link", subtitle: "On conversion · reward link", valid: true, preset: true,
+      config: {
+        waNumber: EX3_WA_NUMBER,
+        waMode: "template",
+        waTemplate: "loyalty_reward_link_v1 · Utility",
+        waVarMap: [
+          { v: "{{1}}", def: "contact.first_name" },
+          { v: "{{2}}", def: "reward_url" },
+        ],
+      },
+    },
+  },
+  {
+    id: "updateAud", type: "workflow", position: { x: 660, y: 960 },
+    data: {
+      kind: "audience", title: "Update audience", subtitle: "On opt-out · suppress + API writeback", valid: true, preset: true,
+      config: {
+        audienceMode: "api",
+        payloadType: "single",
+        fields: [
+          { id: "u1", name: "customer_id", type: "String" as const },
+          { id: "u2", name: "opt_out", type: "Boolean" as const },
+        ],
+        phoneField: "phone",
+      },
+    },
+  },
+  {
+    id: "end", type: "workflow", position: { x: 460, y: 1140 },
+    data: { kind: "end", title: "End", locked: true, valid: true, preset: true },
+  },
+];
+
+const EX3_EDGES: Edge[] = [
+  { id: "ex3-e1", source: "start", target: "audience", type: EDGE },
+  { id: "ex3-e2", source: "audience", target: "tier", type: EDGE },
+  { id: "ex3-e3", source: "tier", sourceHandle: "elite", target: "voiceElite", type: EDGE },
+  { id: "ex3-e4", source: "tier", sourceHandle: "premium", target: "waPremium", type: EDGE },
+  { id: "ex3-e5", source: "tier", sourceHandle: "member", target: "waMember", type: EDGE },
+
+  // Elite
+  { id: "ex3-e6", source: "voiceElite", sourceHandle: "converted", target: "waLink", type: EDGE },
+  { id: "ex3-e7", source: "voiceElite", sourceHandle: "opt_out", target: "updateAud", type: EDGE },
+  { id: "ex3-e8", source: "voiceElite", sourceHandle: "default", target: "voiceEliteRetry", type: EDGE },
+  { id: "ex3-e9", source: "voiceEliteRetry", sourceHandle: "converted", target: "waLink", type: EDGE },
+  { id: "ex3-e10", source: "voiceEliteRetry", sourceHandle: "opt_out", target: "updateAud", type: EDGE },
+  { id: "ex3-e11", source: "voiceEliteRetry", sourceHandle: "default", target: "end", type: EDGE },
+
+  // Premium
+  { id: "ex3-e12", source: "waPremium", sourceHandle: "converted", target: "waLink", type: EDGE },
+  { id: "ex3-e13", source: "waPremium", sourceHandle: "opt_out", target: "updateAud", type: EDGE },
+  { id: "ex3-e14", source: "waPremium", sourceHandle: "default", target: "voicePremium", type: EDGE },
+  { id: "ex3-e15", source: "voicePremium", sourceHandle: "converted", target: "waLink", type: EDGE },
+  { id: "ex3-e16", source: "voicePremium", sourceHandle: "opt_out", target: "updateAud", type: EDGE },
+  { id: "ex3-e17", source: "voicePremium", sourceHandle: "default", target: "end", type: EDGE },
+
+  // Member
+  { id: "ex3-e18", source: "waMember", sourceHandle: "converted", target: "waLink", type: EDGE },
+  { id: "ex3-e19", source: "waMember", sourceHandle: "opt_out", target: "updateAud", type: EDGE },
+  { id: "ex3-e20", source: "waMember", sourceHandle: "default", target: "waMemberRetry", type: EDGE },
+  { id: "ex3-e21", source: "waMemberRetry", sourceHandle: "converted", target: "waLink", type: EDGE },
+  { id: "ex3-e22", source: "waMemberRetry", sourceHandle: "opt_out", target: "updateAud", type: EDGE },
+  { id: "ex3-e23", source: "waMemberRetry", sourceHandle: "default", target: "end", type: EDGE },
+
+  // Shared terminals
+  { id: "ex3-e24", source: "waLink", target: "end", type: EDGE },
+  { id: "ex3-e25", source: "updateAud", target: "end", type: EDGE },
+];
+
 export const EXAMPLE_CAMPAIGNS: Record<string, ExampleCampaign> = {
   c_ex1: {
     name: "Example 1 (Omni-channel React)",
@@ -423,5 +678,11 @@ export const EXAMPLE_CAMPAIGNS: Record<string, ExampleCampaign> = {
     status: "ready",
     nodes: EX2_NODES,
     edges: EX2_EDGES,
+  },
+  c_ex3: {
+    name: "Example 3 (Loyalty tier journey)",
+    status: "ready",
+    nodes: EX3_NODES,
+    edges: EX3_EDGES,
   },
 };

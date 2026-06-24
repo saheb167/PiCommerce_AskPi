@@ -31,9 +31,9 @@ export type CreateRunPayload = {
 };
 
 const CAMPAIGNS: CampaignOption[] = [
-  { id: "cmp_react_q3",   name: "Reactivation · Q3 dormant traders", audienceSource: "csv" },
-  { id: "cmp_onboard_v2", name: "Onboarding · KYC drop-offs",        audienceSource: "api" },
-  { id: "cmp_winback",    name: "Win-back · Lapsed premium",         audienceSource: "csv" },
+  { id: "cmp_react_q3",   name: "Reactivation · Q3 lapsed members", audienceSource: "csv" },
+  { id: "cmp_onboard_v2", name: "Onboarding · Amber sign-ups",      audienceSource: "api" },
+  { id: "cmp_winback",    name: "Win-back · Lapsed Elite",          audienceSource: "csv" },
 ];
 
 /** Derive valid execution options from the selected campaign. */

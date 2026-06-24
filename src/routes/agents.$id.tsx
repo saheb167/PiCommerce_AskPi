@@ -19,7 +19,7 @@ export const Route = createFileRoute("/agents/$id")({
 
 type Section = "personality" | "instructions" | "systemprompt" | "knowledge" | "tools" | "escalation" | "memory" | "campaigns";
 
-const LANGUAGES = ["English", "Hindi", "Tamil", "Telugu", "Marathi"] as const;
+const LANGUAGES = ["English", "Arabic", "French", "Hindi", "Tagalog"] as const;
 
 type CampaignState = "running" | "paused" | "ready" | "draft" | "archived";
 type CampaignUsage = {
@@ -34,10 +34,10 @@ type CampaignUsage = {
    falls back to the concierge set so the prototype always renders. */
 const AGENT_CAMPAIGNS: Record<string, CampaignUsage[]> = {
   a_concierge: [
-    { id: "c_002", name: "New Trader Onboarding", state: "running", channel: "WhatsApp", convs: "4.2K" },
-    { id: "c_001", name: "Dormant Trader Reactivation", state: "running", channel: "WhatsApp + Voice", convs: "3.1K" },
-    { id: "c_004", name: "KYC Drop-off Recovery", state: "ready", channel: "WhatsApp", convs: "2.0K" },
-    { id: "c_003", name: "High-Value Win-Back", state: "paused", channel: "Voice", convs: "1.4K" },
+    { id: "c_002", name: "Amber Member Onboarding", state: "running", channel: "WhatsApp", convs: "4.2K" },
+    { id: "c_001", name: "Lapsed VIP Re-engagement", state: "running", channel: "WhatsApp + Voice", convs: "3.1K" },
+    { id: "c_004", name: "Points Expiry Reminder", state: "ready", channel: "WhatsApp", convs: "2.0K" },
+    { id: "c_003", name: "Elite Tier Win-Back", state: "paused", channel: "Voice", convs: "1.4K" },
     { id: "c_005", name: "Festive Cashback Push", state: "draft", channel: "SMS", convs: "—" },
   ],
 };
@@ -48,7 +48,7 @@ function AgentBuilder() {
   const campaigns = AGENT_CAMPAIGNS[id] ?? AGENT_CAMPAIGNS.a_concierge;
 
   // Live config that feeds the compiled system prompt
-  const [languages, setLanguages] = useState<string[]>(["English", "Hindi"]);
+  const [languages, setLanguages] = useState<string[]>(["English", "Arabic"]);
   const [escalateToHuman, setEscalateToHuman] = useState(true);
   const [promptMode, setPromptMode] = useState<"auto" | "custom">("auto");
   const [customPrompt, setCustomPrompt] = useState("");
@@ -135,7 +135,7 @@ function AgentBuilder() {
                   <Field label="Persona description">
                     <Textarea
                       className="min-h-24 resize-none text-sm"
-                      defaultValue="A calm, knowledgeable concierge for Indian retail traders. Confident but never pushy."
+                      defaultValue="A calm, knowledgeable concierge for Al Tayer's luxury retail and Amber loyalty members. Confident but never pushy."
                     />
                   </Field>
                   <Field label="Tone of voice">
@@ -184,13 +184,13 @@ function AgentBuilder() {
                 <>
                   <SectionTitle title="Instructions" desc="Structured guidance — not a giant prompt blob." />
                   <Field label="Mission">
-                    <Textarea className="min-h-20 resize-none text-sm" defaultValue="Help traders complete onboarding, answer KYC questions, and route high-value queries to a human." />
+                    <Textarea className="min-h-20 resize-none text-sm" defaultValue="Help members complete Amber loyalty enrolment, answer rewards and order questions, and route high-value queries to a human." />
                   </Field>
                   <Field label="Do">
-                    <Textarea className="min-h-20 resize-none text-sm" defaultValue="• Acknowledge user emotion first\n• Cite product handbook when explaining fees\n• Offer a callback if user is dormant 30+ days" />
+                    <Textarea className="min-h-20 resize-none text-sm" defaultValue="• Acknowledge the member by tier first\n• Cite the rewards handbook when explaining points\n• Offer a boutique appointment if a member is lapsed 30+ days" />
                   </Field>
                   <Field label="Don't">
-                    <Textarea className="min-h-20 resize-none text-sm" defaultValue="• Never make investment recommendations\n• Never mention competitor brands\n• Never promise specific returns" />
+                    <Textarea className="min-h-20 resize-none text-sm" defaultValue="• Never quote prices not in the catalogue\n• Never mention competitor brands\n• Never promise a reward that isn't confirmed" />
                   </Field>
                 </>
               )}
@@ -212,7 +212,7 @@ function AgentBuilder() {
                   {[
                     { name: "Product handbook", chunks: 1240, on: true },
                     { name: "Pricing FAQ", chunks: 84, on: true },
-                    { name: "Compliance & SEBI", chunks: 412, on: true },
+                    { name: "Amber rewards & T&Cs", chunks: 412, on: true },
                     { name: "Help center", chunks: 980, on: false },
                   ].map((k) => (
                     <div key={k.name} className="flex items-center justify-between rounded-lg border border-border px-3 py-2.5">
@@ -266,7 +266,7 @@ function AgentBuilder() {
                   >
                     <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Hand-off rules</p>
                     <Rule title="Negative sentiment" desc="Hand off when sentiment < -0.4 over 2 turns" on />
-                    <Rule title="High-value account" desc="Always escalate for users with AUM > ₹10L" on />
+                    <Rule title="High-value member" desc="Always escalate for Elite-tier members spending > AED 10,000" on />
                     <Rule title="Compliance trigger" desc="Escalate any mention of disputes / regulator" on />
                     <Rule title="Fallback after retries" desc="Escalate after 3 failed clarifications" />
                   </div>
@@ -305,11 +305,11 @@ function AgentBuilder() {
 /* System prompt — compiled from config, editable, templated */
 /* --------------------------------------------------------- */
 
-const PROMPT_PERSONA = "A calm, knowledgeable concierge for Indian retail traders. Confident but never pushy.";
+const PROMPT_PERSONA = "A calm, knowledgeable concierge for Al Tayer's luxury retail and Amber loyalty members. Confident but never pushy.";
 const PROMPT_TONES = ["Warm", "Concise"];
-const PROMPT_MISSION = "Help traders complete onboarding, answer KYC questions, and route high-value queries to a human.";
-const PROMPT_DO = "- Acknowledge user emotion first\n- Cite the product handbook when explaining fees\n- Offer a callback if the user is dormant 30+ days";
-const PROMPT_DONT = "- Never make investment recommendations\n- Never mention competitor brands\n- Never promise specific returns";
+const PROMPT_MISSION = "Help members complete Amber loyalty enrolment, answer rewards and order questions, and route high-value queries to a human.";
+const PROMPT_DO = "- Acknowledge the member by tier first\n- Cite the rewards handbook when explaining points\n- Offer a boutique appointment if a member is lapsed 30+ days";
+const PROMPT_DONT = "- Never quote prices not in the catalogue\n- Never mention competitor brands\n- Never promise a reward that isn't confirmed";
 
 function buildSystemPrompt(languages: string[], escalate: boolean): string {
   const parts: string[] = [];
@@ -340,16 +340,16 @@ const PROMPT_TEMPLATES: { id: string; name: string; desc: string; body: string }
   {
     id: "winback",
     name: "Win-back / reactivation",
-    desc: "Re-engage dormant traders",
+    desc: "Re-engage lapsed members",
     body:
-      "You are a reactivation agent for Pi Commerce.\n\nOBJECTIVE\nUnderstand why the trader went dormant and offer a relevant, time-bound reason to return.\n\nALWAYS\n- Lead with empathy, not a pitch\n- Reference one concrete benefit tied to their history\n- Offer a callback if they hesitate\n\nNEVER\n- Never pressure or use urgency tactics\n- Never promise specific returns\n\nESCALATION\nRoute high-value accounts to a relationship manager.",
+      "You are a reactivation agent for the Amber loyalty programme.\n\nOBJECTIVE\nUnderstand why the member lapsed and offer a relevant, time-bound reason to return.\n\nALWAYS\n- Lead with empathy, not a pitch\n- Reference one concrete reward tied to their history\n- Offer a boutique appointment if they hesitate\n\nNEVER\n- Never pressure or use urgency tactics\n- Never promise a reward that isn't confirmed\n\nESCALATION\nRoute Elite-tier members to a relationship manager.",
   },
   {
-    id: "kyc",
-    name: "KYC assistant",
-    desc: "Guide users through verification",
+    id: "enrolment",
+    name: "Enrolment assistant",
+    desc: "Guide members through Amber sign-up",
     body:
-      "You are a KYC assistant for Pi Commerce.\n\nOBJECTIVE\nHelp the user complete identity verification with the fewest possible steps.\n\nALWAYS\n- Explain why each document is needed\n- Catch common PAN / Aadhaar name-mismatch errors\n- Reassure the user their data is encrypted\n\nNEVER\n- Never ask the user to share an OTP or password\n- Never store document numbers in plain text\n\nESCALATION\nEscalate any suspected fraud to compliance immediately.",
+      "You are an enrolment assistant for the Amber loyalty programme.\n\nOBJECTIVE\nHelp the member complete Amber enrolment with the fewest possible steps.\n\nALWAYS\n- Explain why each detail is needed\n- Confirm the member's preferred boutique and contact channel\n- Reassure the member their data is encrypted\n\nNEVER\n- Never ask the member to share an OTP or password\n- Never store payment details in plain text\n\nESCALATION\nEscalate any suspected fraud to the team immediately.",
   },
 ];
 
@@ -610,10 +610,10 @@ function Playground() {
       {mode === "chat" ? (
         <>
           <div className="flex-1 space-y-3 overflow-y-auto p-4 text-[13px]">
-            <Msg who="user" text="hey i can't seem to finish my kyc. it keeps failing on PAN" />
-            <Msg who="bot" text="Sorry about that — I can see the PAN field is rejecting due to a name mismatch with your Aadhaar. Want me to walk you through fixing it in 30 seconds?" />
+            <Msg who="user" text="hi, i can't seem to finish my Amber sign-up. it keeps failing at the last step" />
+            <Msg who="bot" text="Sorry about that — I can see your enrolment is stalling because the mobile number doesn't match the one on your order. Want me to walk you through fixing it in 30 seconds?" />
             <Msg who="user" text="yes pls" />
-            <Msg who="bot" text="Great. First, tap Profile → KYC → Re-upload PAN. Make sure the name matches your Aadhaar exactly, including middle name." />
+            <Msg who="bot" text="Great. First, tap Profile → Amber → Update contact. Make sure the mobile number matches the one you used at checkout, then re-send the verification code." />
           </div>
           <div className="border-t border-border p-3">
             <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">

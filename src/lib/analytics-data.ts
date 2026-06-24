@@ -46,7 +46,7 @@ export type RunRow = {
   sankey: { nodes: SankeyNode[]; edges: SankeyEdge[] };
 };
 
-/* ───────────── Dormant Trader Reactivation ─────────────
+/* ───────────── Lapsed VIP Re-engagement ─────────────
  *  Mirrors the campaign-builder DAG exactly:
  *
  *    Start → Audience(12,402) → A/B Split(60/40)
@@ -154,7 +154,7 @@ const dormantR3: RunRow = {
 };
 
 
-/* ───────────── New Trader Onboarding (simpler 2-channel flow) ───────────── */
+/* ───────────── Amber Member Onboarding (simpler 2-channel flow) ───────────── */
 const onboardingR1: RunRow = {
   id: "r_7102",
   startedAt: "Today · 09:10",
@@ -186,7 +186,7 @@ const onboardingR1: RunRow = {
   },
 };
 
-/* ───────────── KYC Drop-off Recovery (Ads + WhatsApp) ───────────── */
+/* ───────────── Points Expiry Reminder (Ads + WhatsApp) ───────────── */
 const kycR1: RunRow = {
   id: "r_6988",
   startedAt: "Apr 12 · 18:00",
@@ -221,9 +221,9 @@ const kycR1: RunRow = {
 };
 
 export const CAMPAIGNS: CampaignAnalytics[] = [
-  { id: "c_001", name: "Dormant Trader Reactivation", runs: [dormantR1, dormantR2, dormantR3] },
-  { id: "c_002", name: "New Trader Onboarding",        runs: [onboardingR1] },
-  { id: "c_004", name: "KYC Drop-off Recovery",        runs: [kycR1] },
+  { id: "c_001", name: "Lapsed VIP Re-engagement", runs: [dormantR1, dormantR2, dormantR3] },
+  { id: "c_002", name: "Amber Member Onboarding",        runs: [onboardingR1] },
+  { id: "c_004", name: "Points Expiry Reminder",        runs: [kycR1] },
 ];
 export const NODE_METRICS: Partial<Record<
   SankeyNodeKind,
@@ -275,10 +275,10 @@ export function trend(seed: number, days = 14): { dates: string[]; values: numbe
 }
 
 export const CHANNEL_CAMPAIGN_BREAKDOWN: { campaign: string; sent: number; converted: number; rate: number }[] = [
-  { campaign: "Dormant Trader Reactivation", sent: 50000, converted: 5330, rate: 10.7 },
-  { campaign: "New Trader Onboarding",       sent: 4820,  converted: 1840, rate: 38.2 },
-  { campaign: "KYC Drop-off Recovery",       sent: 9802,  converted: 1402, rate: 14.3 },
-  { campaign: "High-Value Win-Back",         sent: 8420,  converted: 982,  rate: 11.7 },
+  { campaign: "Lapsed VIP Re-engagement", sent: 50000, converted: 5330, rate: 10.7 },
+  { campaign: "Amber Member Onboarding",       sent: 4820,  converted: 1840, rate: 38.2 },
+  { campaign: "Points Expiry Reminder",       sent: 9802,  converted: 1402, rate: 14.3 },
+  { campaign: "Elite Tier Win-Back",         sent: 8420,  converted: 982,  rate: 11.7 },
 ];
 /* ───────────── Node configuration (read-only summary for Drawer) ───────────── */
 

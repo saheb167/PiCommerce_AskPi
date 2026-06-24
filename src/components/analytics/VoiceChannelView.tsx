@@ -432,11 +432,11 @@ function CallDrawer({ call, onClose }: { call: Call | null; onClose: () => void 
     if (!call) return [];
     const r = seed(call.id);
     const lines = [
-      ["agent", "Hello, am I speaking with " + call.customer.split(" ")[0] + "? This is Loan Recovery Agent calling from Volt Money."],
+      ["agent", "Hello, am I speaking with " + call.customer.split(" ")[0] + "? This is the Amber concierge calling from Al Tayer."],
       ["customer", "Yes, speaking. Please go ahead."],
-      ["agent", "Calling about the EMI of ₹3.7L due on 22 January. Will you be able to pay on time?"],
-      ["customer", "Yes, the funds are arranged. I will pay by tomorrow."],
-      ["agent", "Thank you. I'll note that down and send a confirmation SMS."],
+      ["agent", "Calling about your 3,700 Amber points expiring on 22 January. Would you like to redeem them before then?"],
+      ["customer", "Yes, I'd love to. I'll visit the boutique this week."],
+      ["agent", "Wonderful. I'll note that down and send a confirmation WhatsApp."],
       ["customer", "Sure, thanks."],
       ["agent", "Have a great day."],
       ["customer", "You too."],
@@ -464,7 +464,7 @@ function CallDrawer({ call, onClose }: { call: Call | null; onClose: () => void 
                     <Badge variant="outline" className={cn("text-[10.5px]", call.status === "Failed" ? "border-destructive/30 bg-destructive/10 text-destructive" : "border-border bg-secondary text-foreground")}>{call.status}</Badge>
                   </div>
                   <p className="text-[11px] text-muted-foreground">
-                    {call.date}, {call.time} {call.duration ? `· ${fmtDur(call.duration)}` : ""} · Loan Recovery — 30 DPD · Loan Recovery Agent
+                    {call.date}, {call.time} {call.duration ? `· ${fmtDur(call.duration)}` : ""} · Points Expiry — 30 days · Amber Concierge
                   </p>
                 </div>
               </div>
@@ -506,8 +506,8 @@ function CallDrawer({ call, onClose }: { call: Call | null; onClose: () => void 
                 <Sparkles className="h-3 w-3" /> Summary
               </div>
               <p className="text-[12.5px] leading-relaxed text-foreground">
-                {call.customer} promised to pay the EMI of ₹3.7L (due on 22 January) within 48 hours.
-                Commitment recorded; SMS reminder scheduled a day before.
+                {call.customer} plans to redeem 3,700 Amber points (expiring 22 January) on a boutique visit this week.
+                Intent recorded; WhatsApp reminder scheduled a day before.
               </p>
             </div>
 

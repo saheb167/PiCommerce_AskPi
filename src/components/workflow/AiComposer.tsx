@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Sparkle, Sparkles, X } from "lucide-react";
-import { CopilotChat } from "@copilotkit/react-ui";
+import { CopilotChat, type UserMessageProps } from "@copilotkit/react-ui";
 import "@copilotkit/react-ui/styles.css";
 import { cn } from "@/lib/utils";
+import { stripPiPrompt } from "@/lib/copilot/endpoint";
 import type { AskPiPlan } from "./AskPiWizard";
 import { AskPiConversation, type ConversationPhase } from "./AskPiConversation";
 import { useCampaignAgentActions } from "./useCampaignAgentActions";
@@ -12,14 +13,100 @@ type State = "collapsed" | "idle" | "wizard";
 /** System guidance for the live agent driving the A1 template flow. */
 const AGENT_INSTRUCTIONS = [
   "You are Pi, the campaign-creation copilot for a marketing platform.",
-  "To create a campaign FROM A TEMPLATE, orchestrate these frontend actions in order:",
-  "1) listCampaignTemplates (optionally pass the user's goal) and help them pick one.",
-  "2) instantiateCampaignTemplate with the chosen id — this renders the draft on the canvas and returns the open variables + tenant-default assumptions.",
-  "3) resolveCampaign — shows the single Resolve card so the user fills the open variables.",
-  "4) validateCampaign — the deterministic compliance gate. If it returns level 'block', call resolveCampaign again. If 'warn', keep the warning text to pass along.",
-  "5) confirmCampaign (pass the warning, if any) — shows sample messages + assumptions and saves the draft as a version. Do NOT launch.",
-  "Never invent ids — only use ids returned by the list actions. Keep chat replies short; let the cards carry the detail.",
+  "STYLE — be concise AND conversational: reply in at most ONE short sentence (≤14 words). Talk WITH the user; don't go silent, but don't restate detail the cards already show.",
+  "Banned openers: 'I'll help you…', 'Let me…', 'Sure,…', 'Great,…'. Skip filler — lead with substance.",
+  "FIRST, always reply with ONE short line restating the goal you understood in your own words (e.g. 'Winning back lapsed members over WhatsApp and voice.'). You MAY echo channels the user explicitly named; never invent channels they did not state.",
+  "ALWAYS START WITH THE TEMPLATE CARD: on the user's first brief, immediately call listCampaignTemplates with their brief verbatim as `query` so the matching approved templates render as tiles — do this for BOTH a named template and a plain-language brief. NEVER call planCampaignFromBrief before the template card has been shown.",
+  "SHOW THE TEMPLATE CARD EXACTLY ONCE PER SESSION — only on that first brief. After it has been shown, NEVER call listCampaignTemplates again: treat any later message that describes a campaign as a brief and go to PATH B (planCampaignFromBrief with that message as `brief`), even if no draft exists yet and even if the message names a template. The user already saw the tiles once; a typed description means build-from-brief, not re-pick.",
+  "PATH A — USER PICKS A TEMPLATE (clicks a tile, or names a template id/name directly): create it FROM THAT TEMPLATE by calling these actions strictly IN ORDER: 1) instantiateCampaignTemplate with the chosen id — renders the draft, returns open variables + assumptions. 2) resolveCampaign — Resolve card. 3) validateCampaign — the compliance gate; on 'block' call resolveCampaign again, on 'warn' keep the warning text. 4) confirmCampaign (pass the warning, if any). Do NOT launch.",
+  "PATH B — USER DESCRIBES INSTEAD OF PICKING (they type a plain-language brief, or say none of the tiles fit): plan it DIRECTLY from the brief. Call these actions strictly IN ORDER: 1) planCampaignFromBrief — pass the user's brief verbatim as `brief`; it renders the draft and returns `needsChannels` / `needsConditional` / `needsPlacement`. 1b) If `needsChannels` is true (the brief named no channel), call setCampaignChannels so the user picks the channel(s), priority and any fallback, THEN continue. 1c) If `needsConditional` is true (the brief frames a Match / Else branch on an audience attribute), call setConditionalBranch so the user sets the rule and which channel each branch routes to, THEN skip to step 3. 2) If `needsPlacement` is true (two or more channels with no fallback), call setChannelPlacement so the user chooses how the channels are placed (fallback / parallel split / A-B test) BEFORE resolving. If it is false, skip to step 3. 3) resolveBriefCampaign — Resolve card for the remaining open variables. 4) validateBriefCampaign — the compliance gate; on 'block' call resolveBriefCampaign again, on 'warn' keep the warning text. 5) confirmBriefCampaign (pass the warning, if any). Do NOT launch.",
+  "TYPED RESOLVE LOOP (both paths) — THIS TAKES PRECEDENCE OVER ROUTING: once a draft already exists this session (you have already called planCampaignFromBrief or instantiateCampaignTemplate), do NOT route to a path again and do NOT call listCampaignTemplates or planCampaignFromBrief — even if the user's message mentions a template name or id. Treat any later message that names a segment, WhatsApp template, voice agent, fallback wait, split rule, sending window, frequency cap, or start timing as ANSWERS to the open variables. Whenever they type such values, call applyAnswers with their message verbatim as `text`, then read its result: if `unmatched` is non-empty, ask them to pick those from the Resolve card (resolveBriefCampaign / resolveCampaign); if `ready` is false, re-show the Resolve card for what's left; if `ready` is true, go to the validate step. Surface each default it reports as an assumption. Never invent ids — applyAnswers does the mapping.",
+  "When the user names a template directly, a one-clause acknowledgement is enough. After any pick, reply 'Done.' or one short clause.",
+  "NEVER call a resolve/validate/confirm action before its draft exists in this session — Path A needs a template instantiated, Path B needs a brief planned. If a tool says no draft exists yet, go back to that path's first step.",
+  "The level returned by validateCampaign / validateBriefCampaign is computed deterministically — act only on the result; never decide pass/warn/block yourself.",
+  "Never invent ids — use only ids returned by the list actions.",
 ].join(" ");
+
+/**
+ * Seeds the live agent chat with the campaign description as the opening user turn.
+ *
+ * The create-campaign modal already captures the goal/description; routing into the
+ * agent (`?agent=true`) should NOT make the user re-type it. So on landing we submit
+ * that text once, as if the user had typed it — Pi then confirms the channels and
+ * proactively calls `listCampaignTemplates(query=seed)` instead of showing a static
+ * greeting.
+ *
+ * Why drive the DOM instead of a hook: CopilotKit 1.61's `<CopilotChat>` already owns
+ * the single `useCopilotChatInternal` instance (one connect effect / one agent run).
+ * Mounting a SECOND chat hook here (`useCopilotChat*`) spins up a rival connect effect
+ * that thrashes the shared connection, so its `isAvailable` never settles and its
+ * `sendMessage` never fires (observed: only `agent/connect`, never `agent/run`). The
+ * deprecated `appendMessage` is also broken — its GQL→AG-UI conversion drops a foreign
+ * message's content and fires an empty run ("messages must not be empty").
+ *
+ * Driving CopilotChat's own textarea + Send button uses that single working connection
+ * on the exact user path: set the value via the native setter (so React's controlled
+ * input registers it), dispatch `input`, then click Send once it enables. Polls briefly
+ * because the chat input mounts a tick after the panel opens.
+ *
+ * Mounted only when the chat panel is open and a description exists; the parent's
+ * `chatSeeded` latch (via `onSeeded`) keeps it to exactly one seed across open/close.
+ */
+function ChatSeeder({ seed, onSeeded }: { seed: string; onSeeded: () => void }) {
+  const sent = useRef(false);
+  useEffect(() => {
+    if (sent.current) return;
+    let cancelled = false;
+    let filled = false;
+    let attempts = 0;
+    const setNativeValue = (ta: HTMLTextAreaElement, value: string) => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(ta, value);
+      ta.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    const tick = () => {
+      if (cancelled || sent.current) return;
+      attempts += 1;
+      const root = document.querySelector(".askpi-chat");
+      const ta = root?.querySelector("textarea") as HTMLTextAreaElement | null;
+      const send = root?.querySelector('button[aria-label="Send"]') as HTMLButtonElement | null;
+      if (ta && !filled) {
+        setNativeValue(ta, seed);
+        filled = true;
+      }
+      // Send enables a tick after the input event is processed by React.
+      if (filled && send && !send.disabled) {
+        sent.current = true;
+        send.click();
+        onSeeded();
+        return;
+      }
+      if (attempts < 60) setTimeout(tick, 80);
+    };
+    const id = setTimeout(tick, 80);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [seed, onSeeded]);
+  return null;
+}
+
+/**
+ * User-message renderer that hides the folded system directive. The server steers the
+ * model by prepending `PI_SYSTEM_PROMPT` (delimited by the pi-style markers) to the
+ * latest user turn, and CopilotKit mirrors that run-input back into its message store —
+ * so without this the prompt would render inside the user's own bubble. {@link stripPiPrompt}
+ * removes everything up to the closing marker, leaving only what the user actually said.
+ * Markup mirrors CopilotKit's default `UserMessage` so styling is unchanged.
+ */
+function PiUserMessage({ message }: UserMessageProps) {
+  const raw = typeof message?.content === "string" ? message.content : "";
+  return <div className="copilotKitMessage copilotKitUserMessage">{stripPiPrompt(raw)}</div>;
+}
 
 export type AiComposerProps = {
   /** "wizard" mode shows the deterministic campaign builder Q&A in the expanded panel. */
@@ -63,6 +150,9 @@ export function AiComposer({
   });
 
   const [wizardPhase, setWizardPhase] = useState<ConversationPhase>("intent");
+  // Latch so the live agent chat is seeded with the campaign description exactly once
+  // (a brief brief opens the run + suggests templates), even across panel open/close.
+  const [chatSeeded, setChatSeeded] = useState(false);
   const [nudgeDismissed, setNudgeDismissed] = useState(false);
   const [hasEngaged, setHasEngaged] = useState(false);
   // The blank-canvas build wizard runs once. After it completes, Ask Pi becomes
@@ -106,6 +196,8 @@ export function AiComposer({
 
   const isOpen = state !== "collapsed";
   const isWizard = state === "wizard";
+  // The campaign description doubles as the opening brief for the live agent chat.
+  const chatSeed = seedDescription?.trim() ?? "";
   const showNudge = !!(nudge?.active && !isOpen && !nudgeDismissed && !hasEngaged);
 
   // Click-outside collapses, unless in the wizard (the wizard owns its own close).
@@ -118,6 +210,11 @@ export function AiComposer({
       if (!containerRef.current) return;
       if (containerRef.current.contains(e.target as Node)) return;
       if (state === "wizard") return;
+      // Radix Select/Dropdown render their options in a portal at the document
+      // root — outside containerRef. Selecting an option must NOT count as an
+      // outside click, or the resolve-card pickers would collapse the panel.
+      const target = e.target as Element | null;
+      if (target?.closest?.("[data-radix-popper-content-wrapper],[data-radix-portal],[role='listbox'],[role='option']")) return;
       collapse();
     };
     document.addEventListener("mousedown", onDown, true);
@@ -221,13 +318,21 @@ export function AiComposer({
                 </button>
               </div>
               <div className="askpi-chat min-h-0 flex-1">
+                {/* Seed the run with the campaign description (once) so Pi opens by
+                    confirming channels + suggesting templates — no re-typing. */}
+                {chatSeed && !chatSeeded && (
+                  <ChatSeeder seed={chatSeed} onSeeded={() => setChatSeeded(true)} />
+                )}
                 <CopilotChat
                   instructions={AGENT_INSTRUCTIONS}
                   className="h-full"
+                  UserMessage={PiUserMessage}
                   labels={{
                     title: "Ask Pi",
-                    initial: "Tell me which campaign template to start from, or describe your goal.",
-                    placeholder: "e.g. Start from pre_due_emi_reminder_v3",
+                    initial: chatSeed
+                      ? "Reading your campaign brief…"
+                      : "Tell me which campaign template to start from, or describe your goal.",
+                    placeholder: "e.g. Start from points_expiry_reminder_v3",
                   }}
                 />
               </div>
