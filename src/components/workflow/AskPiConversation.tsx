@@ -84,6 +84,10 @@ export function AskPiConversation({
   // "experiment" through the A/B percentage card, "broadcast" sends both channels
   // to the full segment.
   const [splitChoice, setSplitChoice] = useState<SplitChoice>(null);
+  // Which logical step of the Resolve card is showing. Open variables are
+  // partitioned by `group` (Audience / Match arm / Else arm / Sending rules …);
+  // a single group degrades to the original one-shot capture.
+  const [resolveStep, setResolveStep] = useState(0);
 
   const seedText = useMemo(
     () => [seedName, seedObjective, seedDescription].filter(Boolean).join(" · "),
@@ -432,6 +436,24 @@ export function AskPiConversation({
     [liveChecks],
   );
 
+  // Partition the open variables into ordered steps by `group` (first-appearance
+  // order). One group → a single-step card (original behaviour); multiple groups
+  // → a Back / Next wizard, gated step-by-step on each step's required fields.
+  const resolveSteps = useMemo(() => {
+    const steps: { label: string; vars: TemplateVar[] }[] = [];
+    const idxOf = new Map<string, number>();
+    for (const v of openVars) {
+      const g = v.group ?? "Resolve open variables";
+      let i = idxOf.get(g);
+      if (i === undefined) { i = steps.length; idxOf.set(g, i); steps.push({ label: g, vars: [] }); }
+      steps[i].vars.push(v);
+    }
+    return steps;
+  }, [openVars]);
+
+  // Re-enter the Resolve phase at the first step (e.g. after a review edit).
+  useEffect(() => { if (phase === "resolve") setResolveStep(0); }, [phase]);
+
   // Free-text edit from the campaign-review screen. Applies a refinement when
   // it matches (e.g. fallback wait), then drops the user back into the resolve
   // loop so they can keep adjusting open variables until it's done.
@@ -647,8 +669,10 @@ export function AskPiConversation({
               })}
             </div>
 
-            {/* Priority */}
-            <div className="mt-3 grid grid-cols-2 gap-2.5">
+            {/* Priority + Fallback. A conditional brief routes by an audience
+                attribute (Match / Else), so a delivery-failure fallback doesn't
+                apply — the split is owned by the branch rule resolved next. */}
+            <div className={cn("mt-3 grid gap-2.5", briefConfig.conditional ? "grid-cols-1" : "grid-cols-2")}>
               <div>
                 <p className="mb-1 text-[11.5px] font-medium text-foreground">Priority channel</p>
                 <Select value={briefConfig.primary} onValueChange={(v) => setPrimaryChannel(v as Channel)}>
@@ -660,19 +684,31 @@ export function AskPiConversation({
                   </SelectContent>
                 </Select>
               </div>
-              <div>
-                <p className="mb-1 text-[11.5px] font-medium text-foreground">Fallback</p>
-                <Select value={briefConfig.fallback ?? "__none"} onValueChange={setFallbackChannel}>
-                  <SelectTrigger className="h-8 text-[12.5px]"><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none" className="text-[12.5px]">No fallback</SelectItem>
-                    {CHANNEL_ORDER.filter((ch) => ch !== briefConfig.primary).map((ch) => (
-                      <SelectItem key={ch} value={ch} className="text-[12.5px]">{CHANNEL_META[ch].label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              {!briefConfig.conditional && (
+                <div>
+                  <p className="mb-1 text-[11.5px] font-medium text-foreground">Fallback</p>
+                  <Select value={briefConfig.fallback ?? "__none"} onValueChange={setFallbackChannel}>
+                    <SelectTrigger className="h-8 text-[12.5px]"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none" className="text-[12.5px]">No fallback</SelectItem>
+                      {CHANNEL_ORDER.filter((ch) => ch !== briefConfig.primary).map((ch) => (
+                        <SelectItem key={ch} value={ch} className="text-[12.5px]">{CHANNEL_META[ch].label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
+
+            {briefConfig.conditional && (
+              <div className="mt-2 flex items-start gap-1.5 rounded-lg border border-ai/25 bg-ai/[0.04] px-2.5 py-2">
+                <GitBranch className="mt-0.5 h-3 w-3 shrink-0 text-ai" />
+                <p className="text-[11px] leading-snug text-muted-foreground">
+                  This brief splits the audience by an attribute (Match / Else). You'll set the branch rule
+                  next — there's no delivery-failure fallback to choose here.
+                </p>
+              </div>
+            )}
 
             {/* Fallback wait */}
             {briefConfig.fallback && (
@@ -725,45 +761,96 @@ export function AskPiConversation({
         </div>
       )}
 
-      {/* Resolve card */}
-      {phase === "resolve" && (
+      {/* Resolve card — walked one logical step (group) at a time. */}
+      {phase === "resolve" && (() => {
+        const multiStep = resolveSteps.length > 1;
+        const idx = Math.min(resolveStep, Math.max(0, resolveSteps.length - 1));
+        const current = resolveSteps[idx] ?? { label: "Resolve open variables", vars: openVars };
+        const isLast = idx >= resolveSteps.length - 1;
+        const stepMissing = current.vars.filter((v) => v.required && !resolved[v.key]?.trim()).length;
+        return (
         <div className="px-5 pb-4 pt-3">
           <div className="rounded-2xl border border-ai/30 bg-ai/[0.03] p-3.5">
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center justify-between gap-2">
               <span className="inline-flex items-center gap-1.5 rounded-full border border-ai/30 bg-ai/5 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-ai">
-                <Sparkles className="h-3 w-3" /> Resolve
+                <Sparkles className="h-3 w-3" /> {multiStep ? current.label : "Resolve"}
               </span>
               <span className="text-[11px] text-muted-foreground">
-                {openVars.length} open variable{openVars.length === 1 ? "" : "s"}
+                {multiStep
+                  ? `Step ${idx + 1} of ${resolveSteps.length}`
+                  : `${openVars.length} open variable${openVars.length === 1 ? "" : "s"}`}
               </span>
             </div>
 
+            {multiStep && (
+              <div className="mt-2.5 flex items-center gap-1">
+                {resolveSteps.map((s, i) => (
+                  <div
+                    key={s.label}
+                    className={cn(
+                      "h-1 flex-1 rounded-full transition-colors",
+                      i < idx ? "bg-ai/60" : i === idx ? "bg-ai" : "bg-muted",
+                    )}
+                  />
+                ))}
+              </div>
+            )}
+
             <div className="mt-3 space-y-3">
-              {openVars.map((v) => (
+              {current.vars.map((v) => (
                 <ResolveField key={v.key} v={v} value={resolved[v.key] ?? ""} onChange={(val) => setField(v.key, val)} />
               ))}
             </div>
 
-            <button
-              onClick={() => (isParallel ? enterJourney() : setPhase("validating"))}
-              disabled={liveBlocks > 0}
-              className={cn(
-                "mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[12px] font-medium transition-all",
-                liveBlocks > 0
-                  ? "cursor-not-allowed bg-muted text-muted-foreground/60"
-                  : "bg-ai text-ai-foreground hover:opacity-90",
+            <div className="mt-3.5 flex items-center gap-2">
+              {multiStep && idx > 0 && (
+                <button
+                  onClick={() => setResolveStep(idx - 1)}
+                  className="flex items-center gap-1 rounded-md px-3 py-2 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" /> Back
+                </button>
               )}
-            >
-              {liveBlocks > 0
-                ? `Set ${liveBlocks} required field${liveBlocks === 1 ? "" : "s"} to continue`
-                : isParallel
-                  ? "Continue to journey"
-                  : "Continue to campaign review"}
-              <ArrowRight className="h-3.5 w-3.5" />
-            </button>
+              {multiStep && !isLast ? (
+                <button
+                  onClick={() => setResolveStep(idx + 1)}
+                  disabled={stepMissing > 0}
+                  className={cn(
+                    "flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[12px] font-medium transition-all",
+                    stepMissing > 0
+                      ? "cursor-not-allowed bg-muted text-muted-foreground/60"
+                      : "bg-ai text-ai-foreground hover:opacity-90",
+                  )}
+                >
+                  {stepMissing > 0
+                    ? `Set ${stepMissing} required field${stepMissing === 1 ? "" : "s"} to continue`
+                    : "Next"}
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              ) : (
+                <button
+                  onClick={() => (isParallel ? enterJourney() : setPhase("validating"))}
+                  disabled={liveBlocks > 0}
+                  className={cn(
+                    "flex flex-1 items-center justify-center gap-1.5 rounded-md px-3 py-2 text-[12px] font-medium transition-all",
+                    liveBlocks > 0
+                      ? "cursor-not-allowed bg-muted text-muted-foreground/60"
+                      : "bg-ai text-ai-foreground hover:opacity-90",
+                  )}
+                >
+                  {liveBlocks > 0
+                    ? `Set ${liveBlocks} required field${liveBlocks === 1 ? "" : "s"} to continue`
+                    : isParallel
+                      ? "Continue to journey"
+                      : "Continue to campaign review"}
+                  <ArrowRight className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* Journey — chat: how does the audience split across parallel channels? */}
       {phase === "journey" && (

@@ -93,19 +93,23 @@ export const TENANT_DEFAULTS: TenantDefaults = {
 /* Declared open variables                                          */
 /* ---------------------------------------------------------------- */
 
+/** Fields shared by every TemplateVar. `group` names the Resolve-card step a var
+ * belongs to (e.g. "Audience", "Match arm", "Sending rules"); the card renders
+ * one step per distinct group, in first-appearance order. */
+type TemplateVarBase = { key: string; label: string; required?: boolean; group?: string };
 export type TemplateVar =
-  | { key: string; kind: "segment"; label: string; required?: boolean }
-  | { key: string; kind: "waTemplate"; label: string; required?: boolean }
-  | { key: string; kind: "voiceAgent"; label: string; required?: boolean }
-  | { key: string; kind: "phoneField"; label: string; default: string; required?: boolean }
-  | { key: string; kind: "smsSender"; label: string; required?: boolean }
-  | { key: string; kind: "duration"; label: string; default: string; required?: boolean }
-  | { key: string; kind: "splitAttribute"; label: string; required?: boolean }
-  | { key: string; kind: "threshold"; label: string; default: string; required?: boolean }
-  | { key: string; kind: "splitValue"; label: string; options: string[]; required?: boolean }
-  | { key: string; kind: "percent"; label: string; default: string; required?: boolean }
-  | { key: string; kind: "window"; label: string; default: string; required?: boolean }
-  | { key: string; kind: "choice"; label: string; default: string; options: string[]; required?: boolean };
+  | (TemplateVarBase & { kind: "segment" })
+  | (TemplateVarBase & { kind: "waTemplate" })
+  | (TemplateVarBase & { kind: "voiceAgent" })
+  | (TemplateVarBase & { kind: "phoneField"; default: string })
+  | (TemplateVarBase & { kind: "smsSender" })
+  | (TemplateVarBase & { kind: "duration"; default: string })
+  | (TemplateVarBase & { kind: "splitAttribute" })
+  | (TemplateVarBase & { kind: "threshold"; default: string })
+  | (TemplateVarBase & { kind: "splitValue"; options: string[] })
+  | (TemplateVarBase & { kind: "percent"; default: string })
+  | (TemplateVarBase & { kind: "window"; default: string })
+  | (TemplateVarBase & { kind: "choice"; default: string; options: string[] });
 
 /**
  * Audience attributes a no-fallback multi-channel campaign can split on. A
@@ -204,9 +208,9 @@ export const START_OPTIONS = ["As soon as approved", "Tomorrow 10:00", "Next Mon
  */
 export function timingVars(): TemplateVar[] {
   return [
-    { key: "sendWindow", kind: "window", label: "Sending window", default: DEFAULT_SEND_WINDOW, required: false },
-    { key: "frequencyCap", kind: "choice", label: "Frequency cap", default: TENANT_DEFAULTS.freqCap, options: FREQUENCY_OPTIONS, required: false },
-    { key: "startTiming", kind: "choice", label: "Start", default: START_OPTIONS[0], options: START_OPTIONS, required: false },
+    { key: "sendWindow", kind: "window", label: "Sending window", default: DEFAULT_SEND_WINDOW, required: false, group: "Sending rules" },
+    { key: "frequencyCap", kind: "choice", label: "Frequency cap", default: TENANT_DEFAULTS.freqCap, options: FREQUENCY_OPTIONS, required: false, group: "Sending rules" },
+    { key: "startTiming", kind: "choice", label: "Start", default: START_OPTIONS[0], options: START_OPTIONS, required: false, group: "Sending rules" },
   ];
 }
 
@@ -234,7 +238,7 @@ export function parseDuration(raw: string): { value: number; unit: "Minutes" | "
   return { value: n, unit: "Hours" };
 }
 
-const durationLabel = (raw: string) => {
+export const durationLabel = (raw: string) => {
   const { value, unit } = parseDuration(raw);
   return `${value} ${unit}`;
 };
@@ -515,15 +519,34 @@ export const CHANNEL_SAMPLE: Record<Channel, string> = {
   voice: "\"Hi, this is calling about the items still in your cart — can I help you complete the order now?\"",
 };
 
+/**
+ * The delivery outcomes a channel node can resolve to — used as labeled exit
+ * ports on a conditional-arm node so a follow-up channel can be wired to fire on
+ * a *chosen* outcome (e.g. only call when WhatsApp Failed). WhatsApp carries the
+ * finer set the delivery webhook reports; voice the call dispositions.
+ */
+export const CHANNEL_DISPOSITIONS: Record<Channel, string[]> = {
+  whatsapp: ["Sent", "Delivered", "Read", "Replied", "Failed"],
+  voice: ["Answered", "No answer", "Busy", "Failed"],
+};
+
 const channelGap = (ch: Channel): TemplateVar => {
   const m = CHANNEL_META[ch];
   return { key: m.resourceKey, kind: m.resourceKind, label: m.resourceLabel, required: true } as TemplateVar;
 };
 
-/** One journey node for a channel, configured from resolved values + tenant defaults. */
+/**
+ * One journey node for a channel, configured from resolved values + tenant
+ * defaults. When an `id` is given (the conditional builder passes arm-prefixed
+ * ids like `e_wa`/`e_voice`) the node's resource is read node-scoped-first —
+ * `waTemplate@<id>` / `voiceAgent@<id>` — falling back to the global key, so each
+ * arm node can carry its own template/agent. Linear / parallel builders pass no
+ * id and so keep reading the single global resource.
+ */
 function channelNode(ch: Channel, y: number, resolved: Record<string, string>, id?: string): Node<WorkflowNodeData> {
   if (ch === "whatsapp") {
-    const wa = findWaTemplate(resolved.waTemplate);
+    const scoped = id ? resolved[`waTemplate@${id}`] : undefined;
+    const wa = findWaTemplate(scoped ?? resolved.waTemplate);
     return { id: id ?? "wa", type: "workflow", position: { x: 0, y },
       data: { kind: "whatsapp", title: "WhatsApp message",
         subtitle: wa ? `Template: ${wa.label}` : "Pick template",
@@ -532,7 +555,8 @@ function channelNode(ch: Channel, y: number, resolved: Record<string, string>, i
           waTemplate: wa ? `${wa.label} · ${wa.category}` : undefined,
           waVarMap: [{ v: "{{1}}", def: "contact.first_name" }, { v: "{{2}}", def: "payload.order_id" }] } } };
   }
-  const agent = findVoiceAgent(resolved.voiceAgent);
+  const scoped = id ? resolved[`voiceAgent@${id}`] : undefined;
+  const agent = findVoiceAgent(scoped ?? resolved.voiceAgent);
   return { id: id ?? "voice", type: "workflow", position: { x: 0, y },
     data: { kind: "voiceCall", title: "Voice call",
       subtitle: agent ? `Agent: ${agent.name}` : "Select voice agent",
@@ -541,6 +565,14 @@ function channelNode(ch: Channel, y: number, resolved: Record<string, string>, i
         callEnd: TENANT_DEFAULTS.windowEnd, timezone: TENANT_DEFAULTS.timezone,
         maxAttempts: 3, retryInterval: "1 hour",
         voiceVarMap: [{ v: "{{name}}", def: "contact.first_name" }] } } };
+}
+
+/** The disposition exit ports + matching config paths a WhatsApp node carries when a follow-up channel is wired off one of its outcomes. */
+function whatsappDispositionPorts(): Pick<WorkflowNodeData, "outputs"> & { paths: { id: string; label: string; variable: string; op: string; value: string }[] } {
+  return {
+    outputs: CHANNEL_DISPOSITIONS.whatsapp.map((d) => ({ id: d, label: d, kind: "exit" as const })),
+    paths: CHANNEL_DISPOSITIONS.whatsapp.map((d) => ({ id: d, label: d, variable: "wa.delivery_state", op: "is", value: d })),
+  };
 }
 
 /**
@@ -636,6 +668,100 @@ export function routeSeqLabel(val: string | undefined, fallback: string): string
 }
 
 /**
+ * Per-channel display names for the conditional path's arm nodes. A channel that
+ * appears more than once across the two arms is numbered in canvas order (Match
+ * arm first), e.g. two WhatsApp nodes become "WhatsApp 1" / "WhatsApp 2"; a
+ * channel that appears only once keeps its plain label ("Voice (AI)"). Keyed by
+ * the arm-prefixed node id (`m_wa`, `e_wa`, `e_voice`) so the builder (node
+ * titles), `conditionalArmSteps` (Resolve-field labels) and `assumptionsFor` all
+ * read the exact same name. Derived from the two routed sequences directly, so it
+ * stays correct even mid-edit when cfg and resolved routing momentarily differ.
+ */
+export function armNodeSerials(matchSeq: Channel[], elseSeq: Channel[]): Map<string, string> {
+  const arms: { prefix: "m" | "e"; seq: Channel[] }[] = [
+    { prefix: "m", seq: matchSeq },
+    { prefix: "e", seq: elseSeq },
+  ];
+  const total: Partial<Record<Channel, number>> = {};
+  for (const { seq } of arms) for (const ch of seq) total[ch] = (total[ch] ?? 0) + 1;
+  const running: Partial<Record<Channel, number>> = {};
+  const labels = new Map<string, string>();
+  for (const { prefix, seq } of arms) {
+    for (const ch of seq) {
+      running[ch] = (running[ch] ?? 0) + 1;
+      const base = CHANNEL_META[ch].label;
+      labels.set(`${prefix}_${CHANNEL_NODE_ID[ch]}`, (total[ch] ?? 0) > 1 ? `${base} ${running[ch]}` : base);
+    }
+  }
+  return labels;
+}
+
+/**
+ * One channel node on a conditional arm, with its arm-prefixed canvas id and the
+ * next channel it chains into (if any). This is the single source of truth for
+ * the conditional path's node ids, shared by `buildConditionalChannels` (which
+ * draws the nodes/edges), `channelOpenVars` (which emits the per-node Resolve
+ * vars), `runChecks` (which validates them) and `assumptionsFor` (which reports
+ * them) so they can never drift on node ids or ordering.
+ *
+ * `nodeId` follows the builder's `${prefix}_${CHANNEL_NODE_ID[ch]}` convention
+ * (`m_wa`, `e_wa`, `e_voice`). The gap key between this step and the next is
+ * `${nodeId}>${nextNodeId}` (used for the inter-channel delay var). `serialLabel`
+ * is the user-facing node name ("WhatsApp 1" / "Voice (AI)") from
+ * `armNodeSerials`; `nextSerialLabel` is the same for the follow-up channel.
+ */
+export type ArmStep = {
+  arm: "m" | "e";
+  armLabel: string;
+  idx: number;
+  ch: Channel;
+  nodeId: string;
+  serialLabel: string;
+  nextCh?: Channel;
+  nextNodeId?: string;
+  nextSerialLabel?: string;
+};
+
+/**
+ * Flatten a conditional brief's two arms into an ordered list of channel steps.
+ * Mirrors `buildConditionalChannels`'s arm-sequence derivation but from `cfg`
+ * alone (routing edits flow back into `cfg.branchMatchSeq`/`branchElseSeq` via
+ * setConditionalBranch, so the cfg sequences stay in lock-step with the built
+ * canvas). Empty arms contribute no steps.
+ */
+export function conditionalArmSteps(cfg: BriefConfig): ArmStep[] {
+  const elseDefaultCh = cfg.channels.find((c) => c !== cfg.primary);
+  const matchSeq = cfg.branchMatchSeq ?? [cfg.primary];
+  const elseSeq = cfg.branchElseSeq ?? (elseDefaultCh ? [elseDefaultCh] : []);
+  const arms: { arm: "m" | "e"; armLabel: string; seq: Channel[] }[] = [
+    { arm: "m", armLabel: "Match arm", seq: matchSeq },
+    { arm: "e", armLabel: "Else arm", seq: elseSeq },
+  ];
+  const serials = armNodeSerials(matchSeq, elseSeq);
+  const steps: ArmStep[] = [];
+  for (const { arm, armLabel, seq } of arms) {
+    for (let i = 0; i < seq.length; i++) {
+      const ch = seq[i];
+      const nextCh = seq[i + 1];
+      const nodeId = `${arm}_${CHANNEL_NODE_ID[ch]}`;
+      const nextNodeId = nextCh ? `${arm}_${CHANNEL_NODE_ID[nextCh]}` : undefined;
+      steps.push({
+        arm,
+        armLabel,
+        idx: i,
+        ch,
+        nodeId,
+        serialLabel: serials.get(nodeId) ?? CHANNEL_META[ch].label,
+        nextCh,
+        nextNodeId,
+        nextSerialLabel: nextNodeId ? serials.get(nextNodeId) : undefined,
+      });
+    }
+  }
+  return steps;
+}
+
+/**
  * Parallel journey for multiple channels with NO fallback: audience fans out
  * directly to each channel node (side by side), each channel ends. Used when a
  * brief names several channels but no fallback — the audience is split between
@@ -712,6 +838,10 @@ export function buildConditionalChannels(
     parseBranchSeq(resolved.branchMatch) ?? cfg.branchMatchSeq ?? [cfg.primary];
   const elseSeq =
     parseBranchSeq(resolved.branchElse) ?? cfg.branchElseSeq ?? (elseDefaultCh ? [elseDefaultCh] : []);
+  // Per-channel node names ("WhatsApp 1" / "WhatsApp 2" / "Voice (AI)") so a
+  // duplicated channel is distinguishable on the canvas and matches its Resolve
+  // field. Derived from the very sequences drawn below, so it never drifts.
+  const serials = armNodeSerials(matchSeq, elseSeq);
 
   const nodes: Node<WorkflowNodeData>[] = [
     { id: "start", type: "workflow", position: { x: 0, y: 0 },
@@ -734,44 +864,79 @@ export function buildConditionalChannels(
 
   // Build each arm as a chain of channel nodes with arm-prefixed ids so the same
   // channel (e.g. WhatsApp) can appear on both Match and Else without colliding.
-  const armNodes = (prefix: "m" | "e", seq: Channel[], x: number): Node<WorkflowNodeData>[] => {
-    const out: Node<WorkflowNodeData>[] = [];
+  // Consecutive channels are separated by a Delay node (its wait read node-scoped
+  // from `armDelay@<gapId>`), and a WhatsApp node that has a follow-up channel
+  // gets disposition exit ports: only the chosen outcome (`followUpOn@<nodeId>`,
+  // default "Failed") continues to the wait/next channel; every other outcome
+  // ends. Nodes + edges are produced together so the disposition wiring and the
+  // delay nodes stay in lock-step.
+  const buildArm = (
+    prefix: "m" | "e",
+    handle: "match" | "else",
+    seq: Channel[],
+    x: number,
+  ): { nodes: Node<WorkflowNodeData>[]; edges: Edge[]; bottomY: number } => {
+    const armNodeList: Node<WorkflowNodeData>[] = [];
+    const armEdgeList: Edge[] = [];
     let y = 380;
-    for (const ch of seq) {
-      const node = channelNode(ch, y, resolved, `${prefix}_${CHANNEL_NODE_ID[ch]}`);
-      node.position = { x, y };
-      out.push(node);
-      y += 120;
-    }
-    return out;
-  };
-  const matchNodes = armNodes("m", matchSeq, -200);
-  const elseNodes = armNodes("e", elseSeq, 200);
-  nodes.push(...matchNodes, ...elseNodes);
+    const ids = seq.map((ch) => `${prefix}_${CHANNEL_NODE_ID[ch]}`);
+    const first = ids[0] ?? "end";
+    armEdgeList.push({ id: `e_branch_${handle}_${first}`, source: CONDITION_NODE_ID, sourceHandle: handle, target: first });
 
-  const maxLen = Math.max(matchSeq.length, elseSeq.length);
-  const endY = 380 + Math.max(maxLen, 1) * 120 + 20;
+    for (let i = 0; i < seq.length; i++) {
+      const ch = seq[i];
+      const nodeId = ids[i];
+      const node = channelNode(ch, y, resolved, nodeId);
+      node.position = { x, y };
+      node.data.title = serials.get(nodeId) ?? node.data.title;
+      const hasNext = i + 1 < seq.length;
+      const delayId = hasNext ? `${prefix}_delay_${i}` : undefined;
+      // Where this channel's "continue" edge points: the inter-channel wait if a
+      // follow-up exists, otherwise End.
+      const onward = hasNext ? delayId! : "end";
+
+      if (ch === "whatsapp" && hasNext) {
+        const ports = whatsappDispositionPorts();
+        node.data.outputs = ports.outputs;
+        node.data.config = { ...node.data.config, paths: ports.paths };
+        const followUp = resolved[`followUpOn@${nodeId}`] ?? "Failed";
+        for (const d of CHANNEL_DISPOSITIONS.whatsapp) {
+          const target = d === followUp ? onward : "end";
+          armEdgeList.push({ id: `e_${nodeId}_${d}_${target}`, source: nodeId, sourceHandle: d, target });
+        }
+      } else {
+        armEdgeList.push({ id: `e_${nodeId}_${onward}`, source: nodeId, target: onward });
+      }
+      armNodeList.push(node);
+      y += 120;
+
+      if (hasNext) {
+        const nextId = ids[i + 1];
+        const gapId = `${nodeId}>${nextId}`;
+        const { value, unit } = parseDuration(resolved[`armDelay@${gapId}`] ?? cfg.fallbackWait ?? "1 hour");
+        armNodeList.push({ id: delayId!, type: "workflow", position: { x, y },
+          data: { kind: "delay", title: "Wait", subtitle: `${value} ${unit}`, valid: true,
+            config: { delayValue: value, delayUnit: unit } } });
+        armEdgeList.push({ id: `e_${delayId}_${nextId}`, source: delayId!, target: nextId });
+        y += 120;
+      }
+    }
+    return { nodes: armNodeList, edges: armEdgeList, bottomY: y };
+  };
+
+  const match = buildArm("m", "match", matchSeq, -200);
+  const els = buildArm("e", "else", elseSeq, 200);
+  nodes.push(...match.nodes, ...els.nodes);
+
+  const endY = Math.max(match.bottomY, els.bottomY, 500) + 20;
   nodes.push({ id: "end", type: "workflow", position: { x: 0, y: endY },
     data: { kind: "end", title: "End", locked: true, valid: true } });
-
-  // Chain a branch arm: branch -[handle]-> first → … → last → end (or branch→end when empty).
-  const armEdges = (arm: Node<WorkflowNodeData>[], handle: "match" | "else"): Edge[] => {
-    const first = arm[0]?.id ?? "end";
-    const es: Edge[] = [
-      { id: `e_branch_${handle}_${first}`, source: CONDITION_NODE_ID, sourceHandle: handle, target: first },
-    ];
-    for (let i = 0; i < arm.length; i++) {
-      const next = arm[i + 1]?.id ?? "end";
-      es.push({ id: `e_${arm[i].id}_${next}`, source: arm[i].id, target: next });
-    }
-    return es;
-  };
 
   const edges: Edge[] = [
     { id: "e_start_audience", source: "start", target: "audience" },
     { id: "e_audience_branch", source: "audience", target: CONDITION_NODE_ID },
-    ...armEdges(matchNodes, "match"),
-    ...armEdges(elseNodes, "else"),
+    ...match.edges,
+    ...els.edges,
   ];
   return { nodes, edges, name };
 }
@@ -779,23 +944,46 @@ export function buildConditionalChannels(
 /** Open variables implied by a channel config: segment + contact-number field + each channel's resource + fallback window. */
 function channelOpenVars(cfg: BriefConfig): TemplateVar[] {
   const vars: TemplateVar[] = [
-    { key: "segment", kind: "segment", label: "Audience segment", required: true },
+    { key: "segment", kind: "segment", label: "Audience segment", required: true, group: "Audience" },
   ];
   // Right after the audience: which attribute supplies the phone number both
   // WhatsApp and voice dial. Defaulted to the primary mobile (surfaced as an
   // assumption), editable on the Resolve card.
   if (cfg.channels.some((c) => c === "whatsapp" || c === "voice")) {
-    vars.push({ key: "phoneField", kind: "phoneField", label: "Contact number field", default: DEFAULT_PHONE_FIELD, required: false });
+    vars.push({ key: "phoneField", kind: "phoneField", label: "Contact number field", default: DEFAULT_PHONE_FIELD, required: false, group: "Audience" });
+  }
+  if (cfg.conditional) {
+    // Conditional path: each arm node is independently configurable from the one
+    // Resolve card. Per channel node — its own template/agent (node-scoped key so
+    // it round-trips to the exact node the builder draws); per inter-channel gap —
+    // an optional wait; per WhatsApp node that has a follow-up — the disposition
+    // that gates it. Walks the same `conditionalArmSteps` the builder/validator
+    // use, so keys never drift. Each var is grouped by its arm (`step.armLabel`)
+    // so the Resolve card renders one step per branch arm, and labelled by the
+    // node's serial name ("WhatsApp 1" / "Voice (AI)") so it matches the canvas.
+    for (const step of conditionalArmSteps(cfg)) {
+      const meta = CHANNEL_META[step.ch];
+      const noun = step.ch === "whatsapp" ? "Template" : "Agent";
+      vars.push({ key: `${meta.resourceKey}@${step.nodeId}`, kind: meta.resourceKind, label: `${step.serialLabel} · ${noun}`, required: true, group: step.armLabel } as TemplateVar);
+      if (step.nextCh && step.nextNodeId) {
+        const nextName = step.nextSerialLabel ?? CHANNEL_META[step.nextCh].label;
+        vars.push({ key: `armDelay@${step.nodeId}>${step.nextNodeId}`, kind: "duration", label: `Wait before ${nextName}`, default: cfg.fallbackWait || "1 hour", required: false, group: step.armLabel });
+        if (step.ch === "whatsapp") {
+          vars.push({ key: `followUpOn@${step.nodeId}`, kind: "choice", label: `${step.serialLabel} · Follow-up disposition`, options: CHANNEL_DISPOSITIONS.whatsapp, default: "Failed", required: false, group: step.armLabel });
+        }
+      }
+    }
+    return vars;
   }
   const seen = new Set<string>();
   for (const ch of cfg.channels) {
     const gap = channelGap(ch);
     if (seen.has(gap.key)) continue;
     seen.add(gap.key);
-    vars.push(gap);
+    vars.push({ ...gap, group: "Messaging" });
   }
   if (cfg.fallback) {
-    vars.push({ key: "fallbackWindow", kind: "duration", label: "Fallback window", default: cfg.fallbackWait, required: false });
+    vars.push({ key: "fallbackWindow", kind: "duration", label: "Fallback window", default: cfg.fallbackWait, required: false, group: "Messaging" });
   }
   return vars;
 }
@@ -1370,49 +1558,69 @@ export function runChecks(
     );
   }
 
-  // 2. Per-channel resource binding + channel compliance.
-  for (const ch of channels) {
-    if (ch === "whatsapp") {
-      const wa = findWaTemplate(resolved.waTemplate);
+  // 2. Per-resource binding + channel compliance. Driven off the resource vars
+  // (not `channels`) so each node is validated independently: the linear /
+  // parallel path declares one global `waTemplate` / `voiceAgent`, the conditional
+  // path one node-scoped key per arm node (`waTemplate@e_wa`, `voiceAgent@e_voice`).
+  // The global keys keep their original check labels; node-scoped keys carry the
+  // arm-qualified var label.
+  for (const v of vars) {
+    if (v.kind === "waTemplate") {
+      const label = v.key === "waTemplate" ? "WhatsApp template" : v.label;
+      const wa = findWaTemplate(resolved[v.key]);
       checks.push(
         !wa
-          ? { id: "wa_template", label: "WhatsApp template", status: "block", detail: "Pick an approved WhatsApp template." }
+          ? { id: `wa_template_${v.key}`, label, status: "block", detail: "Pick an approved WhatsApp template." }
           : wa.status === "pending_reapproval"
-            ? { id: "wa_template", label: "WhatsApp template", status: "warn", detail: `"${wa.label}" is pending re-approval — saved as draft, won't send until approved.` }
-            : { id: "wa_template", label: "WhatsApp template", status: "pass", detail: `"${wa.label}" approved · ${wa.category}.` },
+            ? { id: `wa_template_${v.key}`, label, status: "warn", detail: `"${wa.label}" is pending re-approval — saved as draft, won't send until approved.` }
+            : { id: `wa_template_${v.key}`, label, status: "pass", detail: `"${wa.label}" approved · ${wa.category}.` },
       );
       if (wa) {
+        const optinLabel = v.key === "waTemplate" ? "WhatsApp opt-in" : `${v.label} · opt-in`;
         checks.push(
           wa.category === "Marketing"
-            ? { id: "wa_optin", label: "WhatsApp opt-in", status: "warn", detail: "Marketing template — recipients must have a marketing opt-in." }
-            : { id: "wa_optin", label: "WhatsApp opt-in", status: "pass", detail: "Utility template — no marketing opt-in required." },
+            ? { id: `wa_optin_${v.key}`, label: optinLabel, status: "warn", detail: "Marketing template — recipients must have a marketing opt-in." }
+            : { id: `wa_optin_${v.key}`, label: optinLabel, status: "pass", detail: "Utility template — no marketing opt-in required." },
         );
       }
     }
-    if (ch === "voice") {
-      const agent = findVoiceAgent(resolved.voiceAgent);
+    if (v.kind === "voiceAgent") {
+      const label = v.key === "voiceAgent" ? "Voice agent" : v.label;
+      const agent = findVoiceAgent(resolved[v.key]);
       checks.push(
         !agent
-          ? { id: "voice_agent", label: "Voice agent", status: "block", detail: "Select a live voice agent." }
+          ? { id: `voice_agent_${v.key}`, label, status: "block", detail: "Select a live voice agent." }
           : agent.status !== "live"
-            ? { id: "voice_agent", label: "Voice agent", status: "warn", detail: `Agent "${agent.name}" is ${agent.status}, not live.` }
-            : { id: "voice_agent", label: "Voice agent", status: "pass", detail: `"${agent.name}" is live.` },
+            ? { id: `voice_agent_${v.key}`, label, status: "warn", detail: `Agent "${agent.name}" is ${agent.status}, not live.` }
+            : { id: `voice_agent_${v.key}`, label, status: "pass", detail: `"${agent.name}" is live.` },
       );
     }
   }
 
-  // 3. Fallback timing — only when the journey declares a wait.
-  const durationVar = vars.find((v) => v.kind === "duration");
-  if (durationVar) {
+  // 3. Wait timing — one check per declared wait. The linear path declares a
+  // single fallback wait; the conditional path declares one `armDelay@*` per
+  // inter-channel gap, each labelled by its var.
+  for (const durationVar of vars.filter((v) => v.kind === "duration")) {
     const raw = resolved[durationVar.key] ?? (durationVar.kind === "duration" ? durationVar.default : "");
     const { value, unit } = parseDuration(raw);
+    const isFallback = durationVar.key === "fallbackWindow";
+    const label = isFallback ? "Fallback wait" : durationVar.label;
+    const id = `wait_${durationVar.key}`;
     checks.push(
       !raw
-        ? { id: "fallback_wait", label: "Fallback wait", status: durationVar.required ? "block" : "warn", detail: "Set how long to wait before the fallback fires." }
+        ? { id, label, status: durationVar.required ? "block" : "warn", detail: isFallback ? "Set how long to wait before the fallback fires." : "Set how long to wait before the next channel." }
         : value <= 0
-          ? { id: "fallback_wait", label: "Fallback wait", status: "warn", detail: "Fallback fires immediately — consider a longer wait." }
-          : { id: "fallback_wait", label: "Fallback wait", status: "pass", detail: `Waits ${value} ${unit} after non-delivery before the fallback.` },
+          ? { id, label, status: "warn", detail: isFallback ? "Fallback fires immediately — consider a longer wait." : "Next channel fires immediately — consider a longer wait." }
+          : { id, label, status: "pass", detail: isFallback ? `Waits ${value} ${unit} after non-delivery before the fallback.` : `Waits ${value} ${unit} before the next channel.` },
     );
+  }
+
+  // 3b. Disposition follow-up — report the WhatsApp outcome each arm's follow-up
+  // channel fires on (conditional path). Reads the resolved choice, else default.
+  for (const v of vars) {
+    if (v.kind !== "choice" || !v.key.startsWith("followUpOn@")) continue;
+    const chosen = resolved[v.key]?.trim() || v.default;
+    checks.push({ id: `followup_${v.key}`, label: v.label, status: "pass", detail: `Follows up only when WhatsApp = ${chosen}; other outcomes end the journey.` });
   }
 
   // 4. Channel sequence — distinct channels in priority order.

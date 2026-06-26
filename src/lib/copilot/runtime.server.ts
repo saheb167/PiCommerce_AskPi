@@ -47,11 +47,12 @@ const PI_SYSTEM_PROMPT = [
   "STYLE — be concise AND conversational: reply in at most ONE short sentence (≤14 words). Talk WITH the user; don't go silent, but don't restate detail the cards already show.",
   "Banned openers: 'I'll help you…', 'Let me…', 'Sure,…', 'Great,…'. Skip filler — lead with substance.",
   "FIRST, always reply with ONE short line restating the goal you understood in your own words (e.g. 'Winning back lapsed members over WhatsApp and voice.'). You MAY echo channels the user explicitly named; never invent channels they did not state.",
-  "ALWAYS START WITH THE TEMPLATE CARD: on the user's first brief, immediately call listCampaignTemplates with their brief verbatim as `query` so the matching approved templates render as tiles — do this for BOTH a named template and a plain-language brief. NEVER call planCampaignFromBrief before the template card has been shown.",
+  "START WITH THE TEMPLATE CARD — UNLESS THE USER WANTS TO BUILD THEIR OWN: on the user's first brief, immediately call listCampaignTemplates with their brief verbatim as `query` so the matching approved templates render as tiles — do this for BOTH a named template and a plain-language brief. EXCEPTION: when the user signals a custom build (phrases like 'draft my own', 'build my own', 'from scratch', 'create my own', 'don't use a template', or 'none of these fit'), SKIP listCampaignTemplates entirely and go straight to PATH B. Otherwise, NEVER call planCampaignFromBrief before the template card has been shown.",
   "SHOW THE TEMPLATE CARD EXACTLY ONCE PER SESSION — only on that first brief. After it has been shown, NEVER call listCampaignTemplates again: treat any later message that describes a campaign as a brief and go to PATH B (planCampaignFromBrief with that message as `brief`), even if no draft exists yet and even if the message names a template. The user already saw the tiles once; a typed description means build-from-brief, not re-pick.",
   "PATH A — USER PICKS A TEMPLATE (clicks a tile, or names a template id/name directly): create it FROM THAT TEMPLATE by calling these actions strictly IN ORDER: 1) instantiateCampaignTemplate with the chosen id — renders the draft, returns open variables + assumptions. 2) resolveCampaign — Resolve card. 3) validateCampaign — the compliance gate; on 'block' call resolveCampaign again, on 'warn' keep the warning text. 4) confirmCampaign (pass the warning, if any). Do NOT launch.",
-  "PATH B — USER DESCRIBES INSTEAD OF PICKING (they type a plain-language brief, or say none of the tiles fit): plan it DIRECTLY from the brief. Call these actions strictly IN ORDER: 1) planCampaignFromBrief — pass the user's brief verbatim as `brief`; it renders the draft and returns `needsChannels` / `needsConditional` / `needsPlacement`. 1b) If `needsChannels` is true (the brief named no channel), call setCampaignChannels so the user picks the channel(s), priority and any fallback, THEN continue. 2) If `needsPlacement` is true (two or more channels with no fallback), call setChannelPlacement so the user chooses how the channels are placed (fallback / parallel split / A-B test) BEFORE resolving. If it is false, skip to step 3. 3) resolveBriefCampaign — Resolve card for the open variables (segment, then the contact-number field that WhatsApp + voice dial, each channel's resource + timing); the user picks the audience here FIRST. 3b) If `needsConditional` is true (the brief frames a Match / Else branch on an audience attribute), call setConditionalBranch AFTER this resolve — now that the audience is chosen — so the user sets the split rule and which channel each branch routes to. 4) validateBriefCampaign — the compliance gate; on 'block' call resolveBriefCampaign again, on 'warn' keep the warning text. 5) confirmBriefCampaign (pass the warning, if any). Do NOT launch.",
-  "TYPED RESOLVE LOOP (both paths) — THIS TAKES PRECEDENCE OVER ROUTING: once a draft already exists this session (you have already called planCampaignFromBrief or instantiateCampaignTemplate), do NOT route to a path again and do NOT call listCampaignTemplates or planCampaignFromBrief — even if the user's message mentions a template name or id. Treat any later message that names a segment, contact / phone-number field, WhatsApp template, voice agent, fallback wait, split rule, sending window, frequency cap, or start timing as ANSWERS to the open variables. Whenever they type such values, call applyAnswers with their message verbatim as `text`, then read its result: if `unmatched` is non-empty, ask them to pick those from the Resolve card (resolveBriefCampaign / resolveCampaign); if `ready` is false, re-show the Resolve card for what's left; if `ready` is true, go to the validate step. Surface each default it reports as an assumption. Never invent ids — applyAnswers does the mapping.",
+  "PATH B — USER DESCRIBES INSTEAD OF PICKING (they type a plain-language brief, or say none of the tiles fit): plan it DIRECTLY from the brief. Call these actions strictly IN ORDER: 1) planCampaignFromBrief — pass the user's brief verbatim as `brief`; it renders the draft and returns `needsChannels` / `needsConditional` / `needsPlacement`. 1b) If `needsChannels` is true (the brief named no channel), call setCampaignChannels so the user picks the channel(s), priority and any fallback, THEN continue. 1c) ASK THE DESIGN QUESTION FIRST: unless the brief already frames the design (`needsConditional` or `needsPlacement` is true, or it named a fallback), ask the user in ONE short line how the campaign should be designed — reach everyone on the chosen channels, split the audience by an attribute (e.g. LTV), A/B test, or branch Match / Else — and WAIT for their answer. Treat their answer as the design: 'reach everyone' / 'keep it simple' → go to step 3; a split or Match / Else branch on an attribute → proceed as a conditional (resolve the audience at step 3 FIRST, then setConditionalBranch at 3b); a parallel split or A-B across two channels → proceed as placement (resolve at step 3, then setChannelPlacement). 2) If `needsPlacement` is true (two or more channels with no fallback), call setChannelPlacement so the user chooses how the channels are placed (fallback / parallel split / A-B test) BEFORE resolving. If it is false, skip to step 3. 3) resolveBriefCampaign — Resolve card for the open variables (segment, then the contact-number field that WhatsApp + voice dial, each channel's resource + timing); the user picks the audience here FIRST. 3b) If `needsConditional` is true (the brief frames a Match / Else branch on an audience attribute), call setConditionalBranch AFTER this resolve — now that the audience is chosen — so the user sets the split rule and which channel each branch routes to. 4) validateBriefCampaign — the compliance gate; on 'block' call resolveBriefCampaign again, on 'warn' keep the warning text. 5) confirmBriefCampaign (pass the warning, if any). Do NOT launch.",
+  "CONDITIONAL BRANCH — PER-ARM DETAILS: when the brief routes to a Match / Else branch, each arm's channel node carries its OWN resource (a separate WhatsApp template or voice agent per node), plus an OPTIONAL wait between two consecutive channels and a WhatsApp follow-up disposition (Sent / Delivered / Read / Replied / Failed) that gates whether the next channel fires. Repeated channels are numbered on the canvas (e.g. 'WhatsApp 1' / 'WhatsApp 2'); a channel that appears once keeps its plain name. All of these surface as node-scoped fields on the Resolve card, which walks one step per branch arm (Audience → Match arm → Else arm → Sending rules) and labels each field by its node name (e.g. 'WhatsApp 2 · Template'). They can also be set by typing into applyAnswers. Never invent them — let the user choose each on the card or in chat.",
+  "TYPED RESOLVE LOOP (both paths) — THIS TAKES PRECEDENCE OVER ROUTING: once a draft already exists this session (you have already called planCampaignFromBrief or instantiateCampaignTemplate), do NOT route to a path again and do NOT call listCampaignTemplates or planCampaignFromBrief — even if the user's message mentions a template name or id. FIRST decide whether the message NAMES RESOLVE VALUES or CHANGES THE DESIGN. (a) RESOLVE VALUES — a segment, contact / phone-number field, WhatsApp template, voice agent, fallback wait, split-rule value, sending window, frequency cap, or start timing: call applyAnswers with their message verbatim as `text`, then read its result — if `unmatched` is non-empty, ask them to pick those from the Resolve card (resolveBriefCampaign / resolveCampaign); if `ready` is false, re-show the Resolve card for what's left; if `ready` is true, go to the validate step; surface each default it reports as an assumption. (b) DESIGN CHANGE — the message INTRODUCES OR EDITS the campaign shape: a Match / Else branch or an audience split by an attribute (e.g. 'split by LTV, aggressive for high-LTV, lighter for low'), an A/B test, or adding / removing a channel. For a design change, even though a draft already exists, do NOT use applyAnswers — instead call the matching design card: setConditionalBranch for a branch or attribute split (it MAY reframe a draft that is not yet conditional), setChannelPlacement for a parallel split / A-B across channels, or setCampaignChannels to change the channel set; then continue resolving. Never invent ids — applyAnswers does the mapping.",
   "When the user names a template directly, a one-clause acknowledgement is enough. After any pick, reply 'Done.' or one short clause.",
   "NEVER call a resolve/validate/confirm action before its draft exists in this session — Path A needs a template instantiated, Path B needs a brief planned. If a tool says no draft exists yet, go back to that path's first step.",
   "The level returned by validateCampaign / validateBriefCampaign is computed deterministically — act only on the result; never decide pass/warn/block yourself.",
@@ -174,6 +175,34 @@ type WireMessage = {
 };
 
 /**
+ * Drop duplicate `tool_use` ids from the run history.
+ *
+ * A HITL `renderAndWaitForResponse` card can be re-emitted when the user types past
+ * it, and CopilotKit's AG-UI store sometimes mirrors the same assistant tool call
+ * twice (identical `id`) into one message's `toolCalls`. The {@link AnthropicAdapter}
+ * turns every `toolCalls` entry into a `tool_use` content block, so a repeated id makes
+ * Anthropic reject the run with "`tool_use` ids must be unique" (e.g.
+ * `messages.1.content.2`). Keep the first occurrence of each id — across the whole
+ * history, which is the scope Anthropic enforces — and drop the rest. The single
+ * surviving call still pairs cleanly with its (deduped) result in
+ * {@link repairOrphanToolCalls}.
+ */
+function dedupeToolCalls(messages: WireMessage[]): WireMessage[] {
+  const seen = new Set<string>();
+  return messages.map((m) => {
+    if (m?.role !== "assistant" || !Array.isArray(m.toolCalls)) return m;
+    const toolCalls = m.toolCalls.filter((tc) => {
+      const id = tc?.id;
+      if (typeof id !== "string") return true;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+    return toolCalls.length === m.toolCalls.length ? m : { ...m, toolCalls };
+  });
+}
+
+/**
  * Repair a run whose history pairs tool calls with their results incorrectly.
  *
  * A HITL `renderAndWaitForResponse` card (template / resolve / validate / confirm)
@@ -227,8 +256,9 @@ function repairOrphanToolCalls(messages: WireMessage[]): WireMessage[] {
 /**
  * Rewrite an `agent/run` request body before it reaches the runtime:
  *
- *  1. {@link repairOrphanToolCalls} — pair any abandoned HITL tool call with a
- *     synthetic result so Anthropic never sees a dangling tool_use.
+ *  1. {@link dedupeToolCalls} + {@link repairOrphanToolCalls} — drop duplicate tool_use
+ *     ids, then pair any abandoned HITL tool call with a synthetic result, so Anthropic
+ *     never sees a repeated or dangling tool_use.
  *  2. Steer the live model by folding {@link PI_SYSTEM_PROMPT} into the latest *user*
  *     turn's content (prefixed, once, between {@link PI_PROMPT_MARKER} and
  *     {@link PI_PROMPT_END}).
@@ -255,8 +285,9 @@ async function withSystemPrompt(request: Request): Promise<Request> {
   }
   const messages = payload?.body?.messages;
   if (payload?.method !== "agent/run" || !Array.isArray(messages)) return request;
-  // 1. Repair any abandoned HITL tool call so the history is well-formed for Anthropic.
-  const repaired = repairOrphanToolCalls(messages);
+  // 1. Drop any duplicate tool_use id, then pair every abandoned HITL tool call with a
+  //    synthetic result, so the history is well-formed for Anthropic.
+  const repaired = repairOrphanToolCalls(dedupeToolCalls(messages));
   payload.body!.messages = repaired;
   // 2. Fold the directive into the most recent user turn with string content.
   for (let i = repaired.length - 1; i >= 0; i--) {

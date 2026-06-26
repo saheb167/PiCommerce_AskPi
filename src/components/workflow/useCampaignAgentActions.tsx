@@ -52,6 +52,7 @@ import {
   buildConditionalChannels, conditionFieldsFor, CHANNEL_NODE_ID,
   branchSeqToId, parseBranchSeq, routeSeqLabel,
   splitFieldsFor, experimentVars, validateResolved, resolveFromText,
+  conditionalArmSteps, durationLabel,
   type TemplateVar, type BriefConfig, type Channel,
 } from "@/lib/tenant-registry";
 import type { AskPiPlan } from "./AskPiWizard";
@@ -182,7 +183,30 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
     if (cfg.channels.some((c) => c === "whatsapp" || c === "voice")) {
       lead.push(`Contact number — reaching contacts on the ${phoneAttributeLabel(resolved.phoneField)} field`);
     }
-    if (cfg.fallback) {
+    if (cfg.conditional) {
+      // Per-node choices: each arm channel carries its own template/agent, with an
+      // optional wait + disposition-gated follow-up between consecutive channels.
+      for (const step of conditionalArmSteps(cfg)) {
+        if (step.ch === "whatsapp") {
+          const tpl = findWaTemplate(resolved[`waTemplate@${step.nodeId}`] ?? "");
+          lead.push(`${step.armLabel} · ${step.serialLabel} — ${tpl?.label ?? "template not set"}`);
+        } else {
+          const agent = findVoiceAgent(resolved[`voiceAgent@${step.nodeId}`] ?? "");
+          lead.push(`${step.armLabel} · ${step.serialLabel} — ${agent?.name ?? "agent not set"}`);
+        }
+        if (step.nextCh && step.nextNodeId) {
+          const nextName = step.nextSerialLabel ?? CHANNEL_META[step.nextCh].label;
+          const wait = durationLabel(
+            resolved[`armDelay@${step.nodeId}>${step.nextNodeId}`] ?? cfg.fallbackWait ?? "1 hour",
+          );
+          lead.push(`${step.serialLabel} waits ${wait} before ${nextName}`);
+          if (step.ch === "whatsapp") {
+            const on = resolved[`followUpOn@${step.nodeId}`]?.trim() || "Failed";
+            lead.push(`${step.serialLabel} follows up with ${nextName} when WhatsApp = ${on}`);
+          }
+        }
+      }
+    } else if (cfg.fallback) {
       const wait = resolved.fallbackWindow?.trim() || cfg.fallbackWait;
       lead.push(`Fallback wait — waits ${wait} after non-delivery before the fallback`);
     }
@@ -453,7 +477,7 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
         message: needsConditional
           ? "The brief frames a conditional branch on an audience attribute. Call resolveBriefCampaign FIRST so the user picks the audience + resources, then setConditionalBranch to define the Match / Else split on that audience."
           : needsPlacement
-            ? "Two channels with no fallback. Call setChannelPlacement so the user chooses how to place them (fallback / parallel split / A-B test)."
+            ? "Two channels with no fallback. Call resolveBriefCampaign FIRST so the user picks the audience and each channel's resource, then setChannelPlacement to choose how the channels run on that audience (fallback / parallel split / A-B test)."
             : "Draft rendered on the canvas. Call resolveBriefCampaign so the user fills the open variables.",
       };
     },
@@ -464,7 +488,7 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
   useCopilotAction({
     name: "setChannelPlacement",
     description:
-      "Show the Channel-placement card when a brief names two or more channels with no fallback. The user chooses how the channels are placed: a fallback chain (one after the other on non-delivery), a parallel split (audience divided by an attribute), or an A-B test (random % split to compare them). Patches the canvas with the chosen shape. Blocks until the user submits. Call after planCampaignFromBrief returns needsPlacement, before resolveBriefCampaign.",
+      "Show the Channel-placement card when a brief names two or more channels with no fallback. The user chooses how the channels are placed: a fallback chain (one after the other on non-delivery), a parallel split (audience divided by an attribute), or an A-B test (random % split to compare them). Patches the canvas with the chosen shape. Blocks until the user submits. Call AFTER resolveBriefCampaign (so the audience is already chosen and the split attribute is meaningful), before validateBriefCampaign.",
     parameters: [],
     renderAndWaitForResponse: ({ status, respond }) => {
       const cfg = cfgRef.current;
@@ -502,7 +526,14 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
 
             const bp = planFromBrief(briefTextRef.current, nextCfg);
             briefResolvedRef.current = { ...briefResolvedRef.current, ...placement };
-            const plan = annotatePlacement(bp.plan, nextCfg, briefResolvedRef.current);
+            // Placement runs AFTER resolveBriefCampaign, so re-apply the already
+            // resolved values (segment, channel resources) onto the freshly built
+            // plan before annotating the chosen split / A-B / fallback shape.
+            const plan = annotatePlacement(
+              applyResolvedToPlan(bp.plan, briefResolvedRef.current),
+              nextCfg,
+              briefResolvedRef.current,
+            );
 
             cfgRef.current = nextCfg;
             briefPlanRef.current = plan;
@@ -512,7 +543,7 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
             cb.onBuild?.(plan);
 
             respond?.(
-              `User set channel placement: ${channelsSummary(nextCfg)}. Now call resolveBriefCampaign so they fill the remaining open variables.`,
+              `User set channel placement: ${channelsSummary(nextCfg)}. Now call validateBriefCampaign before confirming.`,
             );
           }}
         />
@@ -614,14 +645,23 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
             const patched = annotatePlacement(applyResolvedToPlan(plan, merged), cfg, merged);
             briefPlanRef.current = patched;
             cb.onBuild?.(patched);
-            // A conditional brief configures the Match / Else split AFTER the
-            // audience is chosen here, so the split attribute is meaningful.
-            // Route to setConditionalBranch once, until the branch is defined.
+            // Both splits are configured AFTER the audience is chosen here, so the
+            // split attribute is meaningful: a conditional brief routes to
+            // setConditionalBranch; a plain two-channel brief routes to
+            // setChannelPlacement. Each fires once, until its placement is set.
             const needsBranch = cfg.conditional && !merged.conditionAttribute;
+            const needsPlacement =
+              !cfg.conditional &&
+              cfg.channels.length >= 2 &&
+              !cfg.fallback &&
+              !merged.splitAttribute &&
+              !merged.splitPct;
             respond?.(
               needsBranch
                 ? `User resolved: ${JSON.stringify(resolved)}. Now call setConditionalBranch so they define the Match / Else split on the chosen audience.`
-                : `User resolved: ${JSON.stringify(resolved)}. Now call validateBriefCampaign before confirming.`,
+                : needsPlacement
+                  ? `User resolved: ${JSON.stringify(resolved)}. Now call setChannelPlacement so they choose how the two channels run on the chosen audience.`
+                  : `User resolved: ${JSON.stringify(resolved)}. Now call validateBriefCampaign before confirming.`,
             );
           }}
         />
@@ -839,11 +879,19 @@ export function useCampaignAgentActions(cb: CampaignAgentCallbacks) {
             briefNameRef.current = bp.plan.name;
             cb.onBuild?.(bp.plan);
 
-            const needsPlacement = nextCfg.channels.length >= 2 && !nextCfg.fallback;
+            // A conditional brief (a Match / Else split on an audience attribute)
+            // is owned by resolveBriefCampaign → setConditionalBranch, never the
+            // parallel placement card — even when the channels were named late
+            // here rather than in the brief. A plain multi-channel brief resolves
+            // the audience first too, then places the channels on it.
+            const needsPlacement =
+              !nextCfg.conditional && nextCfg.channels.length >= 2 && !nextCfg.fallback;
             respond?.(
-              needsPlacement
-                ? `User set channels: ${channelsSummary(nextCfg)}. Two channels with no fallback — call setChannelPlacement next.`
-                : `User set channels: ${channelsSummary(nextCfg)}. Now call resolveBriefCampaign so they fill the open variables.`,
+              nextCfg.conditional
+                ? `User set channels: ${channelsSummary(nextCfg)}. Call resolveBriefCampaign FIRST so they pick the audience, then setConditionalBranch to define the Match / Else split on it.`
+                : needsPlacement
+                  ? `User set channels: ${channelsSummary(nextCfg)}. Now call resolveBriefCampaign so they pick the audience and each channel's resource, then setChannelPlacement to place the channels on that audience.`
+                  : `User set channels: ${channelsSummary(nextCfg)}. Now call resolveBriefCampaign so they fill the open variables.`,
             );
           }}
         />
@@ -1091,7 +1139,10 @@ function ValidationCard({
   );
 }
 
-/** The single Resolve card — only the draft's open variables, registry-backed. */
+/** The Resolve card — open draft variables, registry-backed, walked one
+ *  logical step at a time. Vars are partitioned by their `group` (Audience /
+ *  Match arm / Else arm / Sending rules …) in first-appearance order; a single
+ *  group degrades to the original one-shot capture. */
 function ResolveCard({
   vars, done, onSubmit, seed: seeded,
 }: {
@@ -1112,9 +1163,29 @@ function ResolveCard({
     return seed;
   });
   const [submitted, setSubmitted] = useState(false);
+  const [stepIdx, setStepIdx] = useState(0);
 
-  const missing = vars.filter((v) => v.required && !values[v.key]?.trim());
-  const ready = missing.length === 0;
+  // Partition vars into ordered steps by `group` (first-appearance order).
+  const steps: { label: string; vars: TemplateVar[] }[] = [];
+  const stepOf = new Map<string, number>();
+  for (const v of vars) {
+    const g = v.group ?? "Resolve open variables";
+    let i = stepOf.get(g);
+    if (i === undefined) {
+      i = steps.length;
+      stepOf.set(g, i);
+      steps.push({ label: g, vars: [] });
+    }
+    steps[i].vars.push(v);
+  }
+  const multiStep = steps.length > 1;
+  const idx = Math.min(stepIdx, Math.max(0, steps.length - 1));
+  const current = steps[idx] ?? { label: "Resolve open variables", vars };
+
+  const missing = (vs: TemplateVar[]) => vs.filter((v) => v.required && !values[v.key]?.trim());
+  const stepReady = missing(current.vars).length === 0;
+  const allReady = missing(vars).length === 0;
+  const isLast = idx >= steps.length - 1;
 
   if (done || submitted) {
     return (
@@ -1127,11 +1198,33 @@ function ResolveCard({
 
   return (
     <div className="w-full max-w-[440px] space-y-3 rounded-2xl border border-border bg-card p-3.5">
-      <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-ai">
-        <Sparkles className="h-3.5 w-3.5" /> Resolve open variables
-      </p>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-ai">
+            <Sparkles className="h-3.5 w-3.5" /> {multiStep ? current.label : "Resolve open variables"}
+          </p>
+          {multiStep && (
+            <span className="shrink-0 text-[10.5px] font-medium text-muted-foreground">
+              Step {idx + 1} of {steps.length}
+            </span>
+          )}
+        </div>
+        {multiStep && (
+          <div className="flex items-center gap-1">
+            {steps.map((s, i) => (
+              <div
+                key={s.label}
+                className={cn(
+                  "h-1 flex-1 rounded-full transition-colors",
+                  i < idx ? "bg-ai/60" : i === idx ? "bg-ai" : "bg-muted",
+                )}
+              />
+            ))}
+          </div>
+        )}
+      </div>
       <div className="space-y-2.5">
-        {vars.map((v) => (
+        {current.vars.map((v) => (
           <ResolveField
             key={v.key}
             v={v}
@@ -1140,19 +1233,44 @@ function ResolveCard({
           />
         ))}
       </div>
-      <div className="flex items-center justify-end pt-0.5">
-        <button
-          disabled={!ready}
-          onClick={() => { setSubmitted(true); onSubmit(values); }}
-          className={cn(
-            "rounded-lg px-3.5 py-1.5 text-[12.5px] font-medium transition-all",
-            ready
-              ? "bg-foreground text-background hover:scale-[1.02]"
-              : "cursor-not-allowed bg-muted text-muted-foreground/60",
-          )}
-        >
-          Submit
-        </button>
+      <div className="flex items-center justify-between pt-0.5">
+        {multiStep && idx > 0 ? (
+          <button
+            onClick={() => setStepIdx(idx - 1)}
+            className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-[12.5px] text-muted-foreground hover:text-foreground"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" /> Back
+          </button>
+        ) : (
+          <span />
+        )}
+        {multiStep && !isLast ? (
+          <button
+            disabled={!stepReady}
+            onClick={() => setStepIdx(idx + 1)}
+            className={cn(
+              "flex items-center gap-1 rounded-lg px-3.5 py-1.5 text-[12.5px] font-medium transition-all",
+              stepReady
+                ? "bg-foreground text-background hover:scale-[1.02]"
+                : "cursor-not-allowed bg-muted text-muted-foreground/60",
+            )}
+          >
+            Next <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        ) : (
+          <button
+            disabled={!allReady}
+            onClick={() => { setSubmitted(true); onSubmit(values); }}
+            className={cn(
+              "rounded-lg px-3.5 py-1.5 text-[12.5px] font-medium transition-all",
+              allReady
+                ? "bg-foreground text-background hover:scale-[1.02]"
+                : "cursor-not-allowed bg-muted text-muted-foreground/60",
+            )}
+          >
+            Submit
+          </button>
+        )}
       </div>
     </div>
   );
