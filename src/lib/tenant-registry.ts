@@ -954,22 +954,29 @@ function channelOpenVars(cfg: BriefConfig): TemplateVar[] {
   }
   if (cfg.conditional) {
     // Conditional path: each arm node is independently configurable from the one
-    // Resolve card. Per channel node — its own template/agent (node-scoped key so
-    // it round-trips to the exact node the builder draws); per inter-channel gap —
-    // an optional wait; per WhatsApp node that has a follow-up — the disposition
-    // that gates it. Walks the same `conditionalArmSteps` the builder/validator
-    // use, so keys never drift. Each var is grouped by its arm (`step.armLabel`)
-    // so the Resolve card renders one step per branch arm, and labelled by the
-    // node's serial name ("WhatsApp 1" / "Voice (AI)") so it matches the canvas.
-    for (const step of conditionalArmSteps(cfg)) {
+    // Resolve card. Resolve in priority order — Tier 2 (content) before Tier 3
+    // (logic). Two passes over the same `conditionalArmSteps` the builder/validator
+    // use, so keys never drift:
+    //  • Pass 1 — per channel node, its own template/agent (node-scoped key so it
+    //    round-trips to the exact node the builder draws), grouped by its arm
+    //    (`step.armLabel`) and labelled by the node's serial name ("WhatsApp 1" /
+    //    "Voice (AI)") so it matches the canvas.
+    //  • Pass 2 — the timing/follow-up logic: per inter-channel gap an optional
+    //    wait, per WhatsApp node with a follow-up the disposition that gates it.
+    //    These are deferred to a single trailing "Timing & follow-up" step so the
+    //    card asks for content first and branch/delay logic last.
+    const steps = conditionalArmSteps(cfg);
+    for (const step of steps) {
       const meta = CHANNEL_META[step.ch];
       const noun = step.ch === "whatsapp" ? "Template" : "Agent";
       vars.push({ key: `${meta.resourceKey}@${step.nodeId}`, kind: meta.resourceKind, label: `${step.serialLabel} · ${noun}`, required: true, group: step.armLabel } as TemplateVar);
+    }
+    for (const step of steps) {
       if (step.nextCh && step.nextNodeId) {
         const nextName = step.nextSerialLabel ?? CHANNEL_META[step.nextCh].label;
-        vars.push({ key: `armDelay@${step.nodeId}>${step.nextNodeId}`, kind: "duration", label: `Wait before ${nextName}`, default: cfg.fallbackWait || "1 hour", required: false, group: step.armLabel });
+        vars.push({ key: `armDelay@${step.nodeId}>${step.nextNodeId}`, kind: "duration", label: `${step.armLabel} · Wait before ${nextName}`, default: cfg.fallbackWait || "1 hour", required: false, group: "Timing & follow-up" });
         if (step.ch === "whatsapp") {
-          vars.push({ key: `followUpOn@${step.nodeId}`, kind: "choice", label: `${step.serialLabel} · Follow-up disposition`, options: CHANNEL_DISPOSITIONS.whatsapp, default: "Failed", required: false, group: step.armLabel });
+          vars.push({ key: `followUpOn@${step.nodeId}`, kind: "choice", label: `${step.armLabel} · ${step.serialLabel} follow-up disposition`, options: CHANNEL_DISPOSITIONS.whatsapp, default: "Failed", required: false, group: "Timing & follow-up" });
         }
       }
     }
@@ -983,7 +990,7 @@ function channelOpenVars(cfg: BriefConfig): TemplateVar[] {
     vars.push({ ...gap, group: "Messaging" });
   }
   if (cfg.fallback) {
-    vars.push({ key: "fallbackWindow", kind: "duration", label: "Fallback window", default: cfg.fallbackWait, required: false, group: "Messaging" });
+    vars.push({ key: "fallbackWindow", kind: "duration", label: "Fallback window", default: cfg.fallbackWait, required: false, group: "Timing & follow-up" });
   }
   return vars;
 }
