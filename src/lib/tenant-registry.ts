@@ -108,6 +108,7 @@ export type TemplateVar =
   | (TemplateVarBase & { kind: "threshold"; default: string })
   | (TemplateVarBase & { kind: "splitValue"; options: string[] })
   | (TemplateVarBase & { kind: "percent"; default: string })
+  | (TemplateVarBase & { kind: "text"; default: string; placeholder?: string })
   | (TemplateVarBase & { kind: "window"; default: string })
   | (TemplateVarBase & { kind: "choice"; default: string; options: string[] });
 
@@ -133,8 +134,29 @@ export const SPLIT_ATTRIBUTES: SplitAttribute[] = [
   { id: "customer_type", label: "Member tier", unit: "", example: "Premium", type: "categorical", options: ["Classic", "Premium", "Elite"] },
   { id: "city_tier", label: "Emirate", unit: "", example: "Dubai", type: "categorical", options: ["Dubai", "Abu Dhabi", "Sharjah"] },
   { id: "language", label: "Preferred language", unit: "", example: "Arabic", type: "categorical", options: ["Arabic", "English", "French"] },
+  { id: "fcc_tier", label: "FCC tier", unit: "", example: "Gold", type: "categorical", options: ["Silver", "Gold", "Platinum", "Black"] },
+  // A post-action VOICE-call outcome used as a PRIMARY N-way router: a voice-led
+  // journey places a call, then branches on how it resolved (the Example-2 shape).
+  // Registered here (not in STATE_ATTRIBUTES) because it drives the top-level
+  // branch — one arm per disposition — rather than an in-arm continue/welcome gate.
+  { id: "call_disposition", label: "Call outcome", unit: "", example: "Interested", type: "categorical", options: ["Interested", "Callback", "Not interested", "No connect", "Wrong number"] },
 ];
 export const findSplitAttribute = (id?: string) => SPLIT_ATTRIBUTES.find((a) => a.id === id);
+
+/**
+ * Post-action audience-state attributes a conditional arm can gate on — the state
+ * of a member AFTER an action ran ("did they enrol?", "did they upgrade?").
+ * Distinct from a channel's delivery disposition (Sent/Delivered/Failed, handled
+ * by `whatsappDispositionPorts`): a gate keys on an audience outcome, not a
+ * message receipt. Each attribute enumerates its mutually exclusive outcomes; the
+ * first outcome is the "positive"/goal outcome (rendered first on the gate node).
+ */
+export type StateAttribute = { id: string; label: string; stateVar: string; outcomes: string[] };
+export const STATE_ATTRIBUTES: StateAttribute[] = [
+  { id: "enrollment", label: "Enrolled?", stateVar: "audience.enrollment_state", outcomes: ["Enrolled", "Not enrolled"] },
+  { id: "upgrade_gold", label: "Upgraded to Gold?", stateVar: "audience.tier_upgrade_state", outcomes: ["Upgraded", "Not upgraded"] },
+];
+export const findStateAttribute = (id?: string) => STATE_ATTRIBUTES.find((a) => a.id === id);
 
 /**
  * The open variables a split journey adds, shaped by the chosen attribute:
@@ -158,13 +180,6 @@ export function splitFieldsFor(attrId?: string): TemplateVar[] {
   ];
 }
 
-/** The single open variable a channel A/B experiment adds: the % to the priority channel. */
-export function experimentVars(): TemplateVar[] {
-  return [
-    { key: "splitPct", kind: "percent", label: "% of audience to the priority channel (A/B)", default: "50", required: true },
-  ];
-}
-
 /**
  * The open variables a conditional branch adds, shaped by the chosen attribute:
  * always the attribute picker, plus a numeric `conditionThreshold` OR a
@@ -173,19 +188,23 @@ export function experimentVars(): TemplateVar[] {
  * conditionThreshold) so they never collide with an A/B split's vars, but reuse
  * the split *kinds* so the Resolve card + resolveFromText handle them unchanged.
  */
-export function conditionFieldsFor(attrId?: string): TemplateVar[] {
+export function conditionFieldsFor(attrId?: string, isNway?: boolean): TemplateVar[] {
   const attr = findSplitAttribute(attrId);
   const picker: TemplateVar = { key: "conditionAttribute", kind: "splitAttribute", label: "Branch audience by", required: true };
   if (!attr) return [picker];
+  // N-way categorical: per-arm routes are set on the branch card (one route per
+  // attribute value, stored as `branchRoute@<arm>`), not as a single Match value —
+  // so the picker is the only Resolve-card placement gap.
+  if (isNway) return [picker];
   if (attr.type === "categorical") {
     return [
       picker,
-      { key: "conditionValue", kind: "splitValue", label: `${attr.label} that takes the Match branch`, options: attr.options ?? [], required: true },
+      { key: "conditionValue", kind: "splitValue", label: `${attr.label} that takes Branch 1`, options: attr.options ?? [], required: true },
     ];
   }
   return [
     picker,
-    { key: "conditionThreshold", kind: "threshold", label: "Threshold (≥ takes the Match branch)", default: "", required: true },
+    { key: "conditionThreshold", kind: "threshold", label: "Threshold (≥ takes Branch 1)", default: "", required: true },
   ];
 }
 
@@ -487,7 +506,7 @@ export type Channel = "whatsapp" | "voice";
  * A2 brief (and that back a multi-channel A1 template). `primary` sends first;
  * `fallback` (if any) sends after `fallbackWait` when the primary isn't delivered.
  * `unavailable` lists channel names the brief asked for that this workspace
- * doesn't support; `experiment` marks an A/B-test framing (split to compare).
+ * doesn't support; `contentAb` marks an A/B-test framing (split to compare).
  */
 export type BriefConfig = {
   channels: Channel[];
@@ -495,16 +514,197 @@ export type BriefConfig = {
   fallback: Channel | null;
   fallbackWait: string;
   unavailable?: string[];
-  experiment?: boolean;
+  /**
+   * An A/B test on the LINEAR path — draws start → audience → A/B Split →
+   * per-variant node → End, each variant capturing its own resource + traffic %
+   * on the split's Resolve card. Two shapes share this one config: a CONTENT A/B
+   * (one channel, N template/creative variants — e.g. "WhatsApp message with an
+   * A/B test of templates") and a CHANNEL A/B (one variant per channel — e.g.
+   * "A/B test WhatsApp vs voice"), distinguished purely by each variant's `ch`.
+   * `ch` is the primary channel; `variants` carry the per-variant channel.
+   * Mutually exclusive with `conditional`.
+   */
+  contentAb?: { ch: Channel; variants: AbVariant[] };
   /** Marks a conditional-branch framing — the audience is routed down a Match / Else branch on an attribute. */
   conditional?: boolean;
   /** Default channel sequence the Match (high-tier) branch runs, in order — e.g. [whatsapp] or [whatsapp, voice]. Inferred from the brief; the card can override. */
   branchMatchSeq?: Channel[];
   /** Default channel sequence the Else (low-tier) branch runs, in order — e.g. [whatsapp, voice] for "WhatsApp followed by voice". */
   branchElseSeq?: Channel[];
+  /**
+   * Rich body for the Match (high-tier) arm of the BINARY numeric branch — e.g. an
+   * A/B split of two openers before a voice follow-up (the Example-1 shape). When
+   * set it supersedes branchMatchSeq for the match arm only, letting the arm draw a
+   * nested A/B / gate / welcome while the branch itself stays a Match / Else split
+   * keyed on its numeric threshold (unlike branchArms, which flips the branch to the
+   * categorical N-way "Route on <attr>" form). The Else arm keeps its plain seq
+   * unless branchElseBody is set.
+   */
+  branchMatchBody?: ArmNodeSpec[];
+  /**
+   * Rich body for the Else (low-tier) arm of the BINARY numeric branch — the exact
+   * mirror of branchMatchBody, for briefs that place the A/B (or gate/welcome) on
+   * the LOW arm instead ("in the low-LTV branch, A/B test the voice agents before
+   * the call"). When set it supersedes branchElseSeq for the else arm only. The
+   * branch itself stays a Match / Else split on its numeric threshold.
+   */
+  branchElseBody?: ArmNodeSpec[];
+  /**
+   * N-way categorical branch: one arm per attribute value (e.g. an FCC-tier split
+   * into Silver / Gold / Platinum / Black), each running its own channel sequence.
+   * When set this supersedes branchMatchSeq/branchElseSeq (the binary form); when
+   * absent the conditional path falls back to the binary Match / Else arms.
+   */
+  branchArms?: BranchArm[];
+  /**
+   * A leading channel action run BEFORE the branch — the voice-led shape where a
+   * call (or message) is placed first and the branch then routes on its outcome
+   * (the Example-2 win-back: Voice call → route on call disposition). Inserted
+   * between the audience and the branch node; each lead node is node-scoped under
+   * `pre_<n>` so its template/agent round-trips on the Resolve card. Empty/absent
+   * keeps the classic audience → branch topology.
+   */
+  preBranchSeq?: Channel[];
+  /**
+   * The audience attribute the branch routes on, when `analyzeBrief` could pin it
+   * (a categorical attribute whose values the brief named — e.g. `call_disposition`
+   * for a voice win-back, `fcc_tier` for an enrolment split). Persisted so the
+   * Conditional-branch card opens pre-selected on that attribute with its arms
+   * pre-filled, instead of a blank picker that would let a different attribute be
+   * chosen and silently rebuild the branch on the wrong values. The builder also
+   * falls back to it when `resolved.conditionAttribute` is not yet set, so the very
+   * first draft already draws "Route on <attr>". Unset for the binary numeric path
+   * (no specific attribute is inferred there — the card still asks for it).
+   */
+  conditionAttribute?: string;
   /** False when the brief named no channel (we defaulted to WhatsApp) — Pi then captures channels via a card. */
   channelsNamed?: boolean;
 };
+
+/**
+ * One arm of a conditional branch: the attribute `value` that routes to it
+ * (e.g. "Gold"; absent for the binary Else / default arm), the canvas-id prefix
+ * `id` its nodes are scoped under (`m`/`e` for the binary form, a value slug like
+ * `gold` for N-way — kept stable so node-scoped resolved keys round-trip), the
+ * human `label` shown on the branch output + Resolve groups, and the ordered
+ * channel `seq` it runs.
+ */
+export type BranchArm = { id: string; label: string; value?: string; seq: Channel[]; body?: ArmNodeSpec[] };
+
+/**
+ * An ordered step inside a conditional arm. Phase 1 arms are channel-only (their
+ * `seq` maps 1:1 to `channel` specs), but a richer arm interleaves other node
+ * kinds — a nested A/B split (Phase 2), a post-action audience state gate
+ * (Phase 3) and a per-tier welcome terminal (Phase 4). The builder walks this
+ * body to draw nodes/edges; `conditionalArmSteps` walks the same body to emit the
+ * matching Resolve vars, so the canvas and the card can never drift.
+ */
+/**
+ * One arm of a nested A/B split. `pct` is this variant's share of the arm's
+ * traffic (all variants sum to 100; an equal split is assumed when omitted).
+ * `flow` is a plain-English description of what happens on this variant after
+ * the split — captured on the Resolve card so the post-split topology is never
+ * ambiguous (esp. for 3+ way splits where each emanating flow must be stated).
+ */
+export type AbVariant = { id: string; label: string; ch: Channel; pct?: number; flow?: string };
+
+export type ArmNodeSpec =
+  | { type: "channel"; ch: Channel }
+  | { type: "abSplit"; variants: AbVariant[] }
+  | { type: "gate"; stateId: string; routes: { outcome: string; next: "continue" | "welcome" | "end"; tier?: string }[] }
+  | { type: "welcome"; tier: string };
+
+/**
+ * Resolve each A/B variant's traffic %: prefer a node-scoped `splitPct@<node>_<id>`
+ * from the card, then the spec's own `pct`, else an equal N-way split with any
+ * rounding remainder folded into the last variant so the shares always total 100.
+ */
+export function abVariantPcts(variants: AbVariant[], resolved: Record<string, string>, nodeId: string): number[] {
+  const n = variants.length || 1;
+  const base = Math.floor(100 / n);
+  const raw = variants.map((v, k) => {
+    const scoped = resolved[`splitPct@${nodeId}_${v.id}`];
+    const p = Number(scoped ?? v.pct);
+    return Number.isFinite(p) && p > 0 ? Math.round(p) : k === n - 1 ? 100 - base * (n - 1) : base;
+  });
+  return raw;
+}
+
+/**
+ * Coarse N-way A/B variant detection from a clause. Picks up named variants
+ * (Perks / Savings / Loyalty / Control / Discount) and an explicit count
+ * ("three variants", "3-way split"), falling back to a 2-cell split. Each
+ * variant gets an equal traffic share and a default plain-English flow; the
+ * user renames/repcts/rewrites the flow on the Resolve card.
+ */
+export function detectAbVariants(clause: string, ch: Channel): AbVariant[] {
+  const known: [RegExp, string][] = [
+    [/\bperks?\b/, "Perks"],
+    [/\bsavings?\b/, "Savings"],
+    [/\bloyalty\b/, "Loyalty"],
+    [/\bcontrol\b/, "Control"],
+    [/\bdiscount\b/, "Discount"],
+    [/reactivat/, "Reactivate"],
+    [/winback|win back/, "Winback"],
+  ];
+  const labels: string[] = [];
+  for (const [re, name] of known) if (re.test(clause) && !labels.includes(name)) labels.push(name);
+  const countM = /\b(two|three|four|2|3|4)[\s-]?(?:way|variants?|arms?|cells?|groups?)/.exec(clause);
+  const words: Record<string, number> = { two: 2, three: 3, four: 4 };
+  const count = countM ? words[countM[1]] ?? Number(countM[1]) : 0;
+  const target = Math.min(4, Math.max(labels.length, count, 2));
+  while (labels.length < target) labels.push(`Variant ${String.fromCharCode(65 + labels.length)}`);
+  const base = Math.floor(100 / labels.length);
+  return labels.map((l, k) => ({
+    id: String.fromCharCode(97 + k),
+    label: l,
+    ch,
+    pct: k === labels.length - 1 ? 100 - base * (labels.length - 1) : base,
+    flow: `Send ${CHANNEL_META[ch].label}, then continue to the shared next step`,
+  }));
+}
+
+/**
+ * Channel A/B variants: one variant PER named channel (WhatsApp vs Voice, …),
+ * each carrying its own channel so `emitAbSplit` draws a same-shape A/B Split →
+ * per-channel node → End, and `channelOpenVars` captures that channel's resource
+ * (WhatsApp template / voice agent) per variant on the Resolve card. `splitPct`
+ * seeds the first arm's share on a 2-way split (the rest goes to the other arm);
+ * N-way (3+) channels fall back to an equal split. The user tunes the shares and
+ * picks each resource on the card — the model never invents them.
+ */
+export function channelAbVariants(channels: Channel[], splitPct?: string): AbVariant[] {
+  const chs = channels.length ? channels : (["whatsapp"] as Channel[]);
+  const n = chs.length;
+  const p = Number(splitPct);
+  const twoWaySplit = n === 2 && Number.isFinite(p) && p > 0 && p < 100;
+  const base = Math.floor(100 / n);
+  return chs.map((ch, k) => ({
+    id: String.fromCharCode(97 + k),
+    label: CHANNEL_META[ch].label,
+    ch,
+    pct: twoWaySplit
+      ? (k === 0 ? Math.round(p) : 100 - Math.round(p))
+      : k === n - 1 ? 100 - base * (n - 1) : base,
+    flow: `Send ${CHANNEL_META[ch].label}, then continue to the shared next step`,
+  }));
+}
+
+/**
+ * The ordered node specs an arm draws. Prefers an explicit `arm.body` (the rich
+ * Phase 2-4 form); otherwise derives a channel-only body from `arm.seq` so every
+ * Phase-1 arm — and every node id / resolved key the builder already emits —
+ * stays byte-identical.
+ */
+export function armBody(arm: BranchArm): ArmNodeSpec[] {
+  if (arm.body && arm.body.length) return arm.body;
+  return arm.seq.map((ch) => ({ type: "channel", ch }) as ArmNodeSpec);
+}
+
+/** Canvas-id-safe slug for a welcome tier label ("Gold" → "gold", "VIP Black" → "vip_black"). */
+export function slugTier(tier: string): string {
+  return (tier || "tier").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "tier";
+}
 
 export const CHANNEL_META: Record<
   Channel,
@@ -668,29 +868,69 @@ export function routeSeqLabel(val: string | undefined, fallback: string): string
 }
 
 /**
- * Per-channel display names for the conditional path's arm nodes. A channel that
- * appears more than once across the two arms is numbered in canvas order (Match
- * arm first), e.g. two WhatsApp nodes become "WhatsApp 1" / "WhatsApp 2"; a
- * channel that appears only once keeps its plain label ("Voice (AI)"). Keyed by
- * the arm-prefixed node id (`m_wa`, `e_wa`, `e_voice`) so the builder (node
- * titles), `conditionalArmSteps` (Resolve-field labels) and `assumptionsFor` all
- * read the exact same name. Derived from the two routed sequences directly, so it
- * stays correct even mid-edit when cfg and resolved routing momentarily differ.
+ * A canvas-id-safe slug for a categorical arm value ("Gold" → "gold",
+ * "Abu Dhabi" → "abu_dhabi"). De-collides duplicates (after slugging) with a
+ * numeric suffix so arm node-id prefixes stay unique. `taken` carries the slugs
+ * already assigned in this branch.
  */
-export function armNodeSerials(matchSeq: Channel[], elseSeq: Channel[]): Map<string, string> {
-  const arms: { prefix: "m" | "e"; seq: Channel[] }[] = [
-    { prefix: "m", seq: matchSeq },
-    { prefix: "e", seq: elseSeq },
+export function slugifyArm(value: string, taken: Set<string>): string {
+  const base = (value || "arm").toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "arm";
+  let slug = base;
+  let n = 2;
+  while (taken.has(slug)) slug = `${base}_${n++}`;
+  taken.add(slug);
+  return slug;
+}
+
+/**
+ * Normalize a conditional brief's arms to a single `BranchArm[]` — the one shape
+ * the builder, `conditionalArmSteps`, the validator and the assumptions all read.
+ * When `cfg.branchArms` is set (the N-way categorical case) it is returned as-is.
+ * Otherwise the binary Branch 1 / Branch 2 form is derived from
+ * `branchMatchSeq`/`branchElseSeq` (ids "m"/"e", labels "Branch 1"/"Branch 2") so every
+ * existing flow — and every `…@m_wa`/`…@e_voice` node-scoped resolved key — stays
+ * byte-identical.
+ */
+export function getBranchArms(cfg: BriefConfig): BranchArm[] {
+  if (cfg.branchArms && cfg.branchArms.length) return cfg.branchArms;
+  const elseDefaultCh = cfg.channels.find((c) => c !== cfg.primary);
+  const matchSeq = cfg.branchMatchSeq ?? [cfg.primary];
+  const elseSeq = cfg.branchElseSeq ?? (elseDefaultCh ? [elseDefaultCh] : []);
+  // Either binary arm may carry a rich body (a nested A/B / gate / welcome — the
+  // Example-1 numeric-branch shape) while the branch itself stays Match / Else.
+  const matchBody = cfg.branchMatchBody && cfg.branchMatchBody.length ? cfg.branchMatchBody : undefined;
+  const elseBody = cfg.branchElseBody && cfg.branchElseBody.length ? cfg.branchElseBody : undefined;
+  return [
+    { id: "m", label: "Branch 1", seq: matchSeq, body: matchBody },
+    { id: "e", label: "Branch 2", seq: elseSeq, body: elseBody },
   ];
+}
+
+/**
+ * Per-channel display names for the conditional path's arm nodes. A channel that
+ * appears more than once across the arms is numbered in canvas order (first arm
+ * first), e.g. two WhatsApp nodes become "WhatsApp 1" / "WhatsApp 2"; a channel
+ * that appears only once keeps its plain label ("Voice (AI)"). Keyed by the
+ * arm-prefixed node id (`m_wa`, `e_wa`, `gold_voice`) so the builder (node
+ * titles), `conditionalArmSteps` (Resolve-field labels) and `assumptionsFor` all
+ * read the exact same name. Derived from the arms' routed sequences directly, so
+ * it stays correct even mid-edit when cfg and resolved routing momentarily differ.
+ */
+export function armNodeSerials(arms: BranchArm[]): Map<string, string> {
+  // Only the plain channel chain is serial-numbered; A/B variant nodes and
+  // welcome terminals carry their own titles, so they are excluded here. For a
+  // channel-only arm (Phase 1) this is identical to numbering `arm.seq` directly.
+  const chainChannels = (arm: BranchArm): Channel[] =>
+    armBody(arm).flatMap((s) => (s.type === "channel" ? [s.ch] : []));
   const total: Partial<Record<Channel, number>> = {};
-  for (const { seq } of arms) for (const ch of seq) total[ch] = (total[ch] ?? 0) + 1;
+  for (const arm of arms) for (const ch of chainChannels(arm)) total[ch] = (total[ch] ?? 0) + 1;
   const running: Partial<Record<Channel, number>> = {};
   const labels = new Map<string, string>();
-  for (const { prefix, seq } of arms) {
-    for (const ch of seq) {
+  for (const arm of arms) {
+    for (const ch of chainChannels(arm)) {
       running[ch] = (running[ch] ?? 0) + 1;
       const base = CHANNEL_META[ch].label;
-      labels.set(`${prefix}_${CHANNEL_NODE_ID[ch]}`, (total[ch] ?? 0) > 1 ? `${base} ${running[ch]}` : base);
+      labels.set(`${arm.id}_${CHANNEL_NODE_ID[ch]}`, (total[ch] ?? 0) > 1 ? `${base} ${running[ch]}` : base);
     }
   }
   return labels;
@@ -711,7 +951,8 @@ export function armNodeSerials(matchSeq: Channel[], elseSeq: Channel[]): Map<str
  * `armNodeSerials`; `nextSerialLabel` is the same for the follow-up channel.
  */
 export type ArmStep = {
-  arm: "m" | "e";
+  /** The arm's canvas-id prefix — "m"/"e" for the binary form, a value slug ("gold") for N-way. */
+  arm: string;
   armLabel: string;
   idx: number;
   ch: Channel;
@@ -723,32 +964,36 @@ export type ArmStep = {
 };
 
 /**
- * Flatten a conditional brief's two arms into an ordered list of channel steps.
- * Mirrors `buildConditionalChannels`'s arm-sequence derivation but from `cfg`
- * alone (routing edits flow back into `cfg.branchMatchSeq`/`branchElseSeq` via
- * setConditionalBranch, so the cfg sequences stay in lock-step with the built
- * canvas). Empty arms contribute no steps.
+ * Flatten a conditional brief's arms into an ordered list of channel steps.
+ * Reads the arms through `getBranchArms` (the binary Match / Else form, or an
+ * N-way categorical `cfg.branchArms`) so it stays in lock-step with the canvas
+ * the builder draws from the same normalizer. Empty arms contribute no steps.
  */
 export function conditionalArmSteps(cfg: BriefConfig): ArmStep[] {
-  const elseDefaultCh = cfg.channels.find((c) => c !== cfg.primary);
-  const matchSeq = cfg.branchMatchSeq ?? [cfg.primary];
-  const elseSeq = cfg.branchElseSeq ?? (elseDefaultCh ? [elseDefaultCh] : []);
-  const arms: { arm: "m" | "e"; armLabel: string; seq: Channel[] }[] = [
-    { arm: "m", armLabel: "Match arm", seq: matchSeq },
-    { arm: "e", armLabel: "Else arm", seq: elseSeq },
-  ];
-  const serials = armNodeSerials(matchSeq, elseSeq);
+  const arms = getBranchArms(cfg);
+  const serials = armNodeSerials(arms);
   const steps: ArmStep[] = [];
-  for (const { arm, armLabel, seq } of arms) {
-    for (let i = 0; i < seq.length; i++) {
-      const ch = seq[i];
-      const nextCh = seq[i + 1];
-      const nodeId = `${arm}_${CHANNEL_NODE_ID[ch]}`;
-      const nextNodeId = nextCh ? `${arm}_${CHANNEL_NODE_ID[nextCh]}` : undefined;
+  for (const arm of arms) {
+    const body = armBody(arm);
+    // Walk the body; emit an ArmStep for each channel spec. `nextCh`/`nextNodeId`
+    // are populated ONLY when the immediately-following spec is also a channel —
+    // this is what preserves the inter-channel delay + WhatsApp follow-up var
+    // semantics, and keeps a channel-only body byte-identical with the old `seq`
+    // enumeration. A channel followed by an A/B split / gate / welcome has no
+    // "next channel" (those specs carry their own vars).
+    let idx = 0;
+    for (let i = 0; i < body.length; i++) {
+      const spec = body[i];
+      if (spec.type !== "channel") continue;
+      const ch = spec.ch;
+      const nextSpec = body[i + 1];
+      const nextCh = nextSpec && nextSpec.type === "channel" ? nextSpec.ch : undefined;
+      const nodeId = `${arm.id}_${CHANNEL_NODE_ID[ch]}`;
+      const nextNodeId = nextCh ? `${arm.id}_${CHANNEL_NODE_ID[nextCh]}` : undefined;
       steps.push({
-        arm,
-        armLabel,
-        idx: i,
+        arm: arm.id,
+        armLabel: arm.label,
+        idx: idx++,
         ch,
         nodeId,
         serialLabel: serials.get(nodeId) ?? CHANNEL_META[ch].label,
@@ -759,6 +1004,127 @@ export function conditionalArmSteps(cfg: BriefConfig): ArmStep[] {
     }
   }
   return steps;
+}
+
+/**
+ * The non-channel steps on the conditional arms — A/B splits, state gates and
+ * welcome terminals — with their arm-prefixed canvas ids. This is the sibling of
+ * {@link conditionalArmSteps} (which enumerates the plain channel chain): together
+ * they cover every node the rich-body walker draws, so `channelOpenVars`,
+ * `runChecks` and `assumptionsFor` can surface a Resolve var / check / assumption
+ * for each without re-deriving node ids. Node-id conventions match the walker:
+ * `${arm}_ab${i}` (+ `_${variantId}` for each variant channel), `${arm}_gate${i}`,
+ * `${arm}_welcome_${slugTier(tier)}`.
+ */
+export type ArmRichStep =
+  | { kind: "abSplit"; arm: string; armLabel: string; nodeId: string; variants: AbVariant[] }
+  | { kind: "gate"; arm: string; armLabel: string; nodeId: string; stateId: string; routes: { outcome: string; next: "continue" | "welcome" | "end"; tier?: string }[] }
+  | { kind: "welcome"; arm: string; armLabel: string; nodeId: string; tier: string };
+
+export function conditionalArmRichSteps(cfg: BriefConfig): ArmRichStep[] {
+  const out: ArmRichStep[] = [];
+  for (const arm of getBranchArms(cfg)) {
+    const body = armBody(arm);
+    // Welcome nodes are deduped per arm by node id: the builder's `ensureWelcome`
+    // creates ONE node per (arm, tier), whether it comes from a body `welcome`
+    // spec or from a gate route whose `next` is "welcome". Track seen ids so each
+    // welcome surfaces exactly one template var (never doubled by two routes to
+    // the same tier).
+    const seenWelcome = new Set<string>();
+    const pushWelcome = (tier: string) => {
+      const nodeId = `${arm.id}_welcome_${slugTier(tier)}`;
+      if (seenWelcome.has(nodeId)) return;
+      seenWelcome.add(nodeId);
+      out.push({ kind: "welcome", arm: arm.id, armLabel: arm.label, nodeId, tier });
+    };
+    for (let i = 0; i < body.length; i++) {
+      const s = body[i];
+      if (s.type === "abSplit")
+        out.push({ kind: "abSplit", arm: arm.id, armLabel: arm.label, nodeId: `${arm.id}_ab${i}`, variants: s.variants });
+      else if (s.type === "gate") {
+        out.push({ kind: "gate", arm: arm.id, armLabel: arm.label, nodeId: `${arm.id}_gate${i}`, stateId: s.stateId, routes: s.routes });
+        // A gate route that ends in a per-tier welcome needs that welcome's
+        // template on the Resolve card too — enumerate it here so it validates.
+        for (const r of s.routes) if (r.next === "welcome" && r.tier) pushWelcome(r.tier);
+      } else if (s.type === "welcome") pushWelcome(s.tier);
+    }
+  }
+  return out;
+}
+
+/**
+ * Draw an A/B Split node plus one per-variant channel node, wiring each variant to
+ * `onward`. Shared by the conditional arm-body walker (`buildArm`) and the linear
+ * content-A/B builder so both render an identical split. Per-variant traffic shares
+ * come from resolved > spec > equal split; the split subtitle states every share
+ * ("50/30/20") and each variant node is prefixed with its share ("50% · …"). The
+ * caller supplies the incoming edge into `nodeId`. Returns the advanced y.
+ */
+function emitAbSplit(
+  nodeId: string,
+  x: number,
+  y: number,
+  variants: AbVariant[],
+  resolved: Record<string, string>,
+  onward: string,
+  nodeList: Node<WorkflowNodeData>[],
+  edgeList: Edge[],
+): number {
+  const pcts = abVariantPcts(variants, resolved, nodeId);
+  nodeList.push({ id: nodeId, type: "workflow", position: { x, y },
+    data: { kind: "abSplit", title: "A/B Split", subtitle: pcts.join("/"), valid: true,
+      outputs: variants.map((v) => ({ id: v.id, label: v.label, kind: "variant" as const })),
+      config: { splitVariants: variants.map((v, k) => ({ id: v.id, label: v.label, pct: pcts[k] })) } } });
+  y += 120;
+  let vx = x - ((variants.length - 1) * 200) / 2;
+  variants.forEach((v, k) => {
+    const vId = `${nodeId}_${v.id}`;
+    const vNode = channelNode(v.ch, y, resolved, vId);
+    vNode.position = { x: vx, y };
+    vNode.data.title = v.label;
+    // Prefix the variant node with its traffic share so the split reads at a
+    // glance ("50% · Template: reactivate_v3"); the plain-English "what happens
+    // next" flow is captured on the Resolve card + validation, not the node.
+    const base = vNode.data.subtitle ?? "";
+    vNode.data.subtitle = base ? `${pcts[k]}% · ${base}` : `${pcts[k]}%`;
+    nodeList.push(vNode);
+    edgeList.push({ id: `e_${nodeId}_${v.id}_${vId}`, source: nodeId, sourceHandle: v.id, target: vId });
+    edgeList.push({ id: `e_${vId}_${onward}`, source: vId, target: onward });
+    vx += 200;
+  });
+  y += 120;
+  return y;
+}
+
+/**
+ * Linear same-channel CONTENT A/B: start → audience → an A/B Split whose N variant
+ * nodes are all the same channel (each capturing its own template), converging to a
+ * single End. Distinct from `buildParallelChannels` (two different channels) and
+ * from the conditional arm A/B (which sits inside a branch). The split node id is
+ * `lin_ab0`, so every per-variant Resolve key (`waTemplate@lin_ab0_a`,
+ * `splitPct@lin_ab0_a`, `abFlow@lin_ab0_a`) is validated by the existing var-driven
+ * `runChecks` A/B logic with no extra checks.
+ */
+export function buildContentAbChannels(name: string, cfg: BriefConfig, resolved: Record<string, string>): AskPiPlan {
+  const seg = findSegment(resolved.segment);
+  const nodes: Node<WorkflowNodeData>[] = [
+    { id: "start", type: "workflow", position: { x: 0, y: 0 },
+      data: { kind: "start", title: "Start", locked: true, valid: true } },
+    { id: "audience", type: "workflow", position: { x: 0, y: 120 },
+      data: { kind: "audience", title: "Audience",
+        subtitle: audienceSubtitle(resolved),
+        valid: !!seg, error: seg ? undefined : "Select segment",
+        config: { audienceMode: "api", phoneField: resolved.phoneField ?? DEFAULT_PHONE_FIELD } } },
+  ];
+  const edges: Edge[] = [
+    { id: "e_start_audience", source: "start", target: "audience" },
+    { id: "e_audience_lin_ab0", source: "audience", target: "lin_ab0" },
+  ];
+  const variants = cfg.contentAb?.variants ?? [];
+  const bottomY = emitAbSplit("lin_ab0", 0, 260, variants, resolved, "end", nodes, edges);
+  nodes.push({ id: "end", type: "workflow", position: { x: 0, y: bottomY + 20 },
+    data: { kind: "end", title: "End", locked: true, valid: true } });
+  return { nodes, edges, name };
 }
 
 /**
@@ -822,7 +1188,7 @@ export function buildConditionalChannels(
   resolved: Record<string, string>,
 ): AskPiPlan {
   const seg = findSegment(resolved.segment);
-  const attr = findSplitAttribute(resolved.conditionAttribute);
+  const attr = findSplitAttribute(resolved.conditionAttribute ?? cfg.conditionAttribute);
   const categorical = attr?.type === "categorical";
   const branchValue = categorical ? resolved.conditionValue : resolved.conditionThreshold;
   const matchCut = attr
@@ -831,17 +1197,38 @@ export function buildConditionalChannels(
       : `${attr.label} ≥ ${attr.unit}${resolved.conditionThreshold ?? "…"}`
     : "Set the branch rule";
 
-  // Each arm runs an ordered channel sequence. Resolve-card routing wins; else
-  // the brief-inferred sequence; else Match→primary, Else→other channel (or End).
-  const elseDefaultCh = cfg.channels.find((c) => c !== cfg.primary);
-  const matchSeq =
-    parseBranchSeq(resolved.branchMatch) ?? cfg.branchMatchSeq ?? [cfg.primary];
-  const elseSeq =
-    parseBranchSeq(resolved.branchElse) ?? cfg.branchElseSeq ?? (elseDefaultCh ? [elseDefaultCh] : []);
+  // Normalize to N arms (the binary Match / Else form, or an N-way categorical
+  // `cfg.branchArms`), then apply Resolve-card routing overrides per arm: binary
+  // arms read the legacy `branchMatch`/`branchElse` keys, N-way arms read
+  // `branchRoute@<armId>`. Each arm's own inferred sequence is the fallback.
+  const isNway = !!(cfg.branchArms && cfg.branchArms.length);
+  const arms = getBranchArms(cfg).map((arm) => {
+    const routeKey = isNway ? `branchRoute@${arm.id}` : arm.id === "m" ? "branchMatch" : "branchElse";
+    return { ...arm, seq: parseBranchSeq(resolved[routeKey]) ?? arm.seq };
+  });
+  // The N-way branch routes on the attribute itself (one arm per value), so it is
+  // "set" once the attribute is chosen; the binary branch also needs its single
+  // match value/threshold. Per-arm route completeness is enforced on the card.
+  const branchReady = isNway ? !!attr : !!attr && !!branchValue;
   // Per-channel node names ("WhatsApp 1" / "WhatsApp 2" / "Voice (AI)") so a
   // duplicated channel is distinguishable on the canvas and matches its Resolve
   // field. Derived from the very sequences drawn below, so it never drifts.
-  const serials = armNodeSerials(matchSeq, elseSeq);
+  const serials = armNodeSerials(arms);
+
+  // Optional leading channel action(s) placed BEFORE the branch (the voice-led
+  // shape: place a call first, then route on its outcome). Each lead node sits on
+  // the trunk between the audience and the branch, node-scoped `pre_<i>_<ch>` so
+  // its Resolve template/agent round-trips. The branch — and every arm below it —
+  // shifts down one row per lead node so nothing overlaps. Empty seq → the classic
+  // audience → branch topology, byte-identical.
+  const leadSeq = cfg.preBranchSeq ?? [];
+  const leadIds = leadSeq.map((ch, i) => `pre_${i}_${CHANNEL_NODE_ID[ch]}`);
+  const LEAD_OFFSET = leadSeq.length * 120;
+  const leadNodes: Node<WorkflowNodeData>[] = leadSeq.map((ch, i) => {
+    const node = channelNode(ch, 240 + i * 120, resolved, leadIds[i]);
+    node.position = { x: 0, y: 240 + i * 120 };
+    return node;
+  });
 
   const nodes: Node<WorkflowNodeData>[] = [
     { id: "start", type: "workflow", position: { x: 0, y: 0 },
@@ -851,15 +1238,13 @@ export function buildConditionalChannels(
         subtitle: audienceSubtitle(resolved),
         valid: !!seg, error: seg ? undefined : "Select segment",
         config: { audienceMode: "api", phoneField: resolved.phoneField ?? DEFAULT_PHONE_FIELD } } },
-    { id: CONDITION_NODE_ID, type: "workflow", position: { x: 0, y: 240 },
+    ...leadNodes,
+    { id: CONDITION_NODE_ID, type: "workflow", position: { x: 0, y: 240 + LEAD_OFFSET },
       data: { kind: "conditional", title: "Conditional branch",
-        subtitle: matchCut,
-        valid: !!attr && !!branchValue,
-        error: attr && branchValue ? undefined : "Set the branch rule",
-        outputs: [
-          { id: "match", label: "Match", kind: "branch" },
-          { id: "else", label: "Else", kind: "branch" },
-        ] } },
+        subtitle: isNway && attr ? `Route on ${attr.label}` : matchCut,
+        valid: branchReady,
+        error: branchReady ? undefined : "Set the branch rule",
+        outputs: arms.map((a) => ({ id: a.id, label: a.label, kind: "branch" as const })) } },
   ];
 
   // Build each arm as a chain of channel nodes with arm-prefixed ids so the same
@@ -870,73 +1255,204 @@ export function buildConditionalChannels(
   // default "Failed") continues to the wait/next channel; every other outcome
   // ends. Nodes + edges are produced together so the disposition wiring and the
   // delay nodes stay in lock-step.
+  // A Delay node between two arm nodes (its wait read node-scoped from
+  // `armDelay@<gapId>`), shared by the channel-only path and the rich walker.
+  const delayNode = (id: string, gapId: string, x: number, y: number): Node<WorkflowNodeData> => {
+    const { value, unit } = parseDuration(resolved[`armDelay@${gapId}`] ?? cfg.fallbackWait ?? "1 hour");
+    return { id, type: "workflow", position: { x, y },
+      data: { kind: "delay", title: "Wait", subtitle: `${value} ${unit}`, valid: true,
+        config: { delayValue: value, delayUnit: unit } } };
+  };
+
   const buildArm = (
-    prefix: "m" | "e",
-    handle: "match" | "else",
-    seq: Channel[],
+    arm: BranchArm,
     x: number,
   ): { nodes: Node<WorkflowNodeData>[]; edges: Edge[]; bottomY: number } => {
+    const armId = arm.id;
+    const body = armBody(arm);
     const armNodeList: Node<WorkflowNodeData>[] = [];
     const armEdgeList: Edge[] = [];
-    let y = 380;
-    const ids = seq.map((ch) => `${prefix}_${CHANNEL_NODE_ID[ch]}`);
-    const first = ids[0] ?? "end";
-    armEdgeList.push({ id: `e_branch_${handle}_${first}`, source: CONDITION_NODE_ID, sourceHandle: handle, target: first });
+    // Arms start below the branch, which itself sits LEAD_OFFSET lower when a
+    // leading pre-branch action is present, so the whole arm column shifts down.
+    let y = 380 + LEAD_OFFSET;
 
-    for (let i = 0; i < seq.length; i++) {
-      const ch = seq[i];
-      const nodeId = ids[i];
-      const node = channelNode(ch, y, resolved, nodeId);
-      node.position = { x, y };
-      node.data.title = serials.get(nodeId) ?? node.data.title;
-      const hasNext = i + 1 < seq.length;
-      const delayId = hasNext ? `${prefix}_delay_${i}` : undefined;
-      // Where this channel's "continue" edge points: the inter-channel wait if a
-      // follow-up exists, otherwise End.
-      const onward = hasNext ? delayId! : "end";
+    // A channel-only arm (Phase 1) takes the original path verbatim so its nodes,
+    // edges, ids and positions stay byte-identical. Only arms that carry a rich
+    // spec (A/B split, state gate, welcome) go through the walker below.
+    const hasRich = body.some((s) => s.type !== "channel");
+    if (!hasRich) {
+      const seq = body.map((s) => (s as { type: "channel"; ch: Channel }).ch);
+      const ids = seq.map((ch) => `${armId}_${CHANNEL_NODE_ID[ch]}`);
+      const first = ids[0] ?? "end";
+      armEdgeList.push({ id: `e_branch_${armId}_${first}`, source: CONDITION_NODE_ID, sourceHandle: armId, target: first });
 
-      if (ch === "whatsapp" && hasNext) {
-        const ports = whatsappDispositionPorts();
-        node.data.outputs = ports.outputs;
-        node.data.config = { ...node.data.config, paths: ports.paths };
-        const followUp = resolved[`followUpOn@${nodeId}`] ?? "Failed";
-        for (const d of CHANNEL_DISPOSITIONS.whatsapp) {
-          const target = d === followUp ? onward : "end";
-          armEdgeList.push({ id: `e_${nodeId}_${d}_${target}`, source: nodeId, sourceHandle: d, target });
+      for (let i = 0; i < seq.length; i++) {
+        const ch = seq[i];
+        const nodeId = ids[i];
+        const node = channelNode(ch, y, resolved, nodeId);
+        node.position = { x, y };
+        node.data.title = serials.get(nodeId) ?? node.data.title;
+        const hasNext = i + 1 < seq.length;
+        const delayId = hasNext ? `${armId}_delay_${i}` : undefined;
+        // Where this channel's "continue" edge points: the inter-channel wait if a
+        // follow-up exists, otherwise End.
+        const onward = hasNext ? delayId! : "end";
+
+        if (ch === "whatsapp" && hasNext) {
+          const ports = whatsappDispositionPorts();
+          node.data.outputs = ports.outputs;
+          node.data.config = { ...node.data.config, paths: ports.paths };
+          const followUp = resolved[`followUpOn@${nodeId}`] ?? "Failed";
+          for (const d of CHANNEL_DISPOSITIONS.whatsapp) {
+            const target = d === followUp ? onward : "end";
+            armEdgeList.push({ id: `e_${nodeId}_${d}_${target}`, source: nodeId, sourceHandle: d, target });
+          }
+        } else {
+          armEdgeList.push({ id: `e_${nodeId}_${onward}`, source: nodeId, target: onward });
         }
-      } else {
-        armEdgeList.push({ id: `e_${nodeId}_${onward}`, source: nodeId, target: onward });
-      }
-      armNodeList.push(node);
-      y += 120;
+        armNodeList.push(node);
+        y += 120;
 
-      if (hasNext) {
-        const nextId = ids[i + 1];
-        const gapId = `${nodeId}>${nextId}`;
-        const { value, unit } = parseDuration(resolved[`armDelay@${gapId}`] ?? cfg.fallbackWait ?? "1 hour");
-        armNodeList.push({ id: delayId!, type: "workflow", position: { x, y },
-          data: { kind: "delay", title: "Wait", subtitle: `${value} ${unit}`, valid: true,
-            config: { delayValue: value, delayUnit: unit } } });
-        armEdgeList.push({ id: `e_${delayId}_${nextId}`, source: delayId!, target: nextId });
+        if (hasNext) {
+          const nextId = ids[i + 1];
+          const gapId = `${nodeId}>${nextId}`;
+          armNodeList.push(delayNode(delayId!, gapId, x, y));
+          armEdgeList.push({ id: `e_${delayId}_${nextId}`, source: delayId!, target: nextId });
+          y += 120;
+        }
+      }
+      return { nodes: armNodeList, edges: armEdgeList, bottomY: y };
+    }
+
+    // ----- Rich-body walker (Phases 2-4) -----------------------------------
+    // Each spec draws its node(s) and wires forward to the *entry* node of the
+    // next spec (or End when it is the last). Welcome terminals are created on
+    // demand (deduped per tier within the arm) and always converge to the single
+    // shared End node, preserving the one-start / one-end invariant.
+    const entryId = (i: number): string => {
+      const s = body[i];
+      if (!s) return "end";
+      if (s.type === "channel") return `${armId}_${CHANNEL_NODE_ID[s.ch]}`;
+      if (s.type === "abSplit") return `${armId}_ab${i}`;
+      if (s.type === "gate") return `${armId}_gate${i}`;
+      return `${armId}_welcome_${slugTier(s.tier)}`;
+    };
+
+    const welcomeIds = new Map<string, string>();
+    let welcomeX = x + 260;
+    const ensureWelcome = (tier: string, atY: number): string => {
+      const id = `${armId}_welcome_${slugTier(tier)}`;
+      if (!welcomeIds.has(id)) {
+        welcomeIds.set(id, id);
+        const node = channelNode("whatsapp", atY, resolved, id);
+        node.position = { x: welcomeX, y: atY };
+        node.data.title = `Welcome to ${tier}`;
+        node.data.subtitle = "WhatsApp";
+        armNodeList.push(node);
+        armEdgeList.push({ id: `e_${id}_end`, source: id, target: "end" });
+        welcomeX += 240;
+      }
+      return id;
+    };
+
+    const first = body.length ? entryId(0) : "end";
+    armEdgeList.push({ id: `e_branch_${armId}_${first}`, source: CONDITION_NODE_ID, sourceHandle: armId, target: first });
+
+    for (let i = 0; i < body.length; i++) {
+      const spec = body[i];
+      const onward = entryId(i + 1);
+      const nodeId = entryId(i);
+
+      if (spec.type === "channel") {
+        const ch = spec.ch;
+        const node = channelNode(ch, y, resolved, nodeId);
+        node.position = { x, y };
+        node.data.title = serials.get(nodeId) ?? node.data.title;
+        const nextSpec = body[i + 1];
+        const nextIsChannel = nextSpec?.type === "channel";
+        const nextIsGate = nextSpec?.type === "gate";
+        // A wait separates this channel from a following channel or state gate
+        // (audience state needs time to settle); A/B / welcome follow immediately.
+        const gated = i + 1 < body.length && (nextIsChannel || nextIsGate);
+        const delayId = gated ? `${armId}_delay_${i}` : undefined;
+        const cont = gated ? delayId! : onward;
+
+        if (ch === "whatsapp" && nextIsChannel) {
+          const ports = whatsappDispositionPorts();
+          node.data.outputs = ports.outputs;
+          node.data.config = { ...node.data.config, paths: ports.paths };
+          const followUp = resolved[`followUpOn@${nodeId}`] ?? "Failed";
+          for (const d of CHANNEL_DISPOSITIONS.whatsapp) {
+            const target = d === followUp ? cont : "end";
+            armEdgeList.push({ id: `e_${nodeId}_${d}_${target}`, source: nodeId, sourceHandle: d, target });
+          }
+        } else {
+          armEdgeList.push({ id: `e_${nodeId}_${cont}`, source: nodeId, target: cont });
+        }
+        armNodeList.push(node);
+        y += 120;
+        if (gated) {
+          armNodeList.push(delayNode(delayId!, `${nodeId}>${onward}`, x, y));
+          armEdgeList.push({ id: `e_${delayId}_${onward}`, source: delayId!, target: onward });
+          y += 120;
+        }
+      } else if (spec.type === "abSplit") {
+        // Shared with the linear content-A/B builder — draws the A/B Split node plus
+        // one per-variant channel node, wiring each to `onward`, and returns the
+        // advanced y.
+        y = emitAbSplit(nodeId, x, y, spec.variants, resolved, onward, armNodeList, armEdgeList);
+      } else if (spec.type === "gate") {
+        const stLabel = resolved[`gateState@${nodeId}`];
+        const st = STATE_ATTRIBUTES.find((a) => a.label === stLabel) ?? findStateAttribute(spec.stateId);
+        armNodeList.push({ id: nodeId, type: "workflow", position: { x, y },
+          data: { kind: "conditional", title: st?.label ?? "State gate",
+            subtitle: st ? `On ${st.stateVar}` : "Set the state check", valid: true,
+            outputs: spec.routes.map((r) => ({ id: slugTier(r.outcome), label: r.outcome, kind: "branch" as const })),
+            config: { paths: spec.routes.map((r) => ({ id: slugTier(r.outcome), label: r.outcome,
+              variable: st?.stateVar ?? "", op: "=", value: r.outcome })) } } });
+        y += 120;
+        for (const r of spec.routes) {
+          const oid = slugTier(r.outcome);
+          const next = (resolved[`gateRoute@${nodeId}:${oid}`] as "continue" | "welcome" | "end") ?? r.next;
+          const target = next === "continue" ? onward
+            : next === "welcome" ? ensureWelcome(r.tier ?? arm.label, y)
+            : "end";
+          armEdgeList.push({ id: `e_${nodeId}_${oid}_${target}`, source: nodeId, sourceHandle: oid, target });
+        }
+        y += 120;
+      } else if (spec.type === "welcome") {
+        ensureWelcome(spec.tier, y);
         y += 120;
       }
     }
     return { nodes: armNodeList, edges: armEdgeList, bottomY: y };
   };
 
-  const match = buildArm("m", "match", matchSeq, -200);
-  const els = buildArm("e", "else", elseSeq, 200);
-  nodes.push(...match.nodes, ...els.nodes);
+  // Spread arms horizontally so N arms don't overlap, centered on x:0. A gutter of
+  // 400 keeps the binary form at its historical ±200 (byte-identical positions).
+  const ARM_GUTTER = 400;
+  const n = arms.length;
+  const built = arms.map((arm, i) => buildArm(arm, (i - (n - 1) / 2) * ARM_GUTTER));
+  for (const b of built) nodes.push(...b.nodes);
 
-  const endY = Math.max(match.bottomY, els.bottomY, 500) + 20;
+  const endY = Math.max(...built.map((b) => b.bottomY), 500) + 20;
   nodes.push({ id: "end", type: "workflow", position: { x: 0, y: endY },
     data: { kind: "end", title: "End", locked: true, valid: true } });
 
+  // Trunk: start → audience → (each lead node in turn) → branch. With no lead
+  // nodes this collapses to the single byte-identical `e_audience_branch` edge.
+  const leadChain: Edge[] = [];
+  let prevTrunk = "audience";
+  for (const id of leadIds) {
+    leadChain.push({ id: `e_${prevTrunk}_${id}`, source: prevTrunk, target: id });
+    prevTrunk = id;
+  }
+  leadChain.push({ id: `e_${prevTrunk}_branch`, source: prevTrunk, target: CONDITION_NODE_ID });
+
   const edges: Edge[] = [
     { id: "e_start_audience", source: "start", target: "audience" },
-    { id: "e_audience_branch", source: "audience", target: CONDITION_NODE_ID },
-    ...match.edges,
-    ...els.edges,
+    ...leadChain,
+    ...built.flatMap((b) => b.edges),
   ];
   return { nodes, edges, name };
 }
@@ -965,6 +1481,16 @@ function channelOpenVars(cfg: BriefConfig): TemplateVar[] {
     //    wait, per WhatsApp node with a follow-up the disposition that gates it.
     //    These are deferred to a single trailing "Timing & follow-up" step so the
     //    card asks for content first and branch/delay logic last.
+    //
+    // Pass 0 — any leading pre-branch action(s) (the voice-led shape). Each lead
+    // node is node-scoped `pre_<i>_<ch>` exactly as the builder draws it, grouped
+    // "Before branch" so the card resolves the opening call/message first.
+    const leadSeq = cfg.preBranchSeq ?? [];
+    leadSeq.forEach((ch, i) => {
+      const meta = CHANNEL_META[ch];
+      const noun = ch === "whatsapp" ? "Template" : "Agent";
+      vars.push({ key: `${meta.resourceKey}@pre_${i}_${CHANNEL_NODE_ID[ch]}`, kind: meta.resourceKind, label: `${meta.label} · ${noun}`, required: true, group: "Before branch" } as TemplateVar);
+    });
     const steps = conditionalArmSteps(cfg);
     for (const step of steps) {
       const meta = CHANNEL_META[step.ch];
@@ -980,6 +1506,49 @@ function channelOpenVars(cfg: BriefConfig): TemplateVar[] {
         }
       }
     }
+    // Pass 3 — the rich arm steps (A/B splits, state gates, welcome terminals).
+    // Each is node-scoped exactly as the walker draws it, so a card edit round-trips
+    // to the right node: A/B → a split-percent + one template/agent per variant;
+    // gate → a state-attribute picker + per-outcome route; welcome → its template.
+    for (const rs of conditionalArmRichSteps(cfg)) {
+      if (rs.kind === "abSplit") {
+        // N-way A/B: per variant, a traffic-% field (shares sum to 100, validated),
+        // its template/agent, and a REQUIRED plain-English "what happens next" flow
+        // so every emanating branch of the split is explicitly stated by the user.
+        const defaults = abVariantPcts(rs.variants, {}, rs.nodeId);
+        rs.variants.forEach((v, k) => {
+          const meta = CHANNEL_META[v.ch];
+          const noun = v.ch === "whatsapp" ? "Template" : "Agent";
+          vars.push({ key: `splitPct@${rs.nodeId}_${v.id}`, kind: "percent", label: `${rs.armLabel} · ${v.label} · Traffic %`, default: String(v.pct ?? defaults[k]), required: false, group: rs.armLabel });
+          vars.push({ key: `${meta.resourceKey}@${rs.nodeId}_${v.id}`, kind: meta.resourceKind, label: `${rs.armLabel} · ${v.label} · ${noun}`, required: true, group: rs.armLabel } as TemplateVar);
+          vars.push({ key: `abFlow@${rs.nodeId}_${v.id}`, kind: "text", label: `${rs.armLabel} · ${v.label} · What happens next`, default: v.flow ?? `Send ${meta.label}, then continue to the shared next step`, placeholder: "Describe this variant's flow in plain English", required: true, group: rs.armLabel } as TemplateVar);
+        });
+      } else if (rs.kind === "gate") {
+        const st = findStateAttribute(rs.stateId);
+        vars.push({ key: `gateState@${rs.nodeId}`, kind: "choice", label: `${rs.armLabel} · State check`, options: STATE_ATTRIBUTES.map((a) => a.label), default: st?.label ?? STATE_ATTRIBUTES[0].label, required: false, group: rs.armLabel });
+        for (const r of rs.routes) {
+          vars.push({ key: `gateRoute@${rs.nodeId}:${slugTier(r.outcome)}`, kind: "choice", label: `${rs.armLabel} · ${r.outcome} →`, options: ["continue", "welcome", "end"], default: r.next, required: false, group: rs.armLabel });
+        }
+      } else {
+        vars.push({ key: `${CHANNEL_META.whatsapp.resourceKey}@${rs.nodeId}`, kind: CHANNEL_META.whatsapp.resourceKind, label: `${rs.armLabel} · Welcome to ${rs.tier} · Template`, required: true, group: rs.armLabel } as TemplateVar);
+      }
+    }
+    return vars;
+  }
+  // Linear content A/B (single channel, N template variants). Mirror the conditional
+  // arm A/B rich-step fields, node-scoped to the fixed split id `lin_ab0` so the
+  // Resolve card captures a template + traffic % + "what happens next" per variant,
+  // and the var-driven `runChecks` A/B logic validates each one automatically.
+  if (cfg.contentAb) {
+    const vs = cfg.contentAb.variants;
+    const defaults = abVariantPcts(vs, {}, "lin_ab0");
+    vs.forEach((v, k) => {
+      const meta = CHANNEL_META[v.ch];
+      const noun = v.ch === "whatsapp" ? "Template" : "Agent";
+      vars.push({ key: `splitPct@lin_ab0_${v.id}`, kind: "percent", label: `A/B · ${v.label} · Traffic %`, default: String(v.pct ?? defaults[k]), required: false, group: "A/B test" });
+      vars.push({ key: `${meta.resourceKey}@lin_ab0_${v.id}`, kind: meta.resourceKind, label: `A/B · ${v.label} · ${noun}`, required: true, group: "A/B test" } as TemplateVar);
+      vars.push({ key: `abFlow@lin_ab0_${v.id}`, kind: "text", label: `A/B · ${v.label} · What happens next`, default: v.flow ?? `Send ${meta.label}, then continue to the shared next step`, placeholder: "Describe this variant's flow in plain English", required: true, group: "A/B test" } as TemplateVar);
+    });
     return vars;
   }
   const seen = new Set<string>();
@@ -999,6 +1568,13 @@ function channelOpenVars(cfg: BriefConfig): TemplateVar[] {
 export function channelsSummary(cfg: BriefConfig): string {
   const p = CHANNEL_META[cfg.primary].label;
   if (cfg.conditional) {
+    // N-way categorical: list each arm's route (e.g. "Silver → WhatsApp; Gold → …").
+    if (cfg.branchArms && cfg.branchArms.length) {
+      const arms = cfg.branchArms
+        .map((arm) => `${arm.label} → ${arm.seq.length ? arm.seq.map((c) => CHANNEL_META[c].label).join(" → ") : "End"}`)
+        .join("; ");
+      return `Conditional branch — ${arms} (routed on an audience attribute)`;
+    }
     const other = cfg.channels.find((c) => c !== cfg.primary);
     const matchLabel = cfg.branchMatchSeq?.length
       ? cfg.branchMatchSeq.map((c) => CHANNEL_META[c].label).join(" → ")
@@ -1006,10 +1582,15 @@ export function channelsSummary(cfg: BriefConfig): string {
     const elseLabel = cfg.branchElseSeq?.length
       ? cfg.branchElseSeq.map((c) => CHANNEL_META[c].label).join(" → ")
       : other ? CHANNEL_META[other].label : "End";
-    return `Conditional branch — Match → ${matchLabel}; Else → ${elseLabel} (routed on an audience attribute)`;
+    return `Conditional branch — Branch 1 → ${matchLabel}; Branch 2 → ${elseLabel} (routed on an audience attribute)`;
   }
-  if (cfg.experiment && cfg.channels.length > 1) {
-    return `A/B test — ${cfg.channels.map((c) => CHANNEL_META[c].label).join(" vs ")} on a split audience`;
+  if (cfg.contentAb) {
+    const vs = cfg.contentAb.variants;
+    const chs = Array.from(new Set(vs.map((v) => v.ch)));
+    if (chs.length > 1) {
+      return `A/B test — ${chs.map((c) => CHANNEL_META[c].label).join(" vs ")} on a split audience`;
+    }
+    return `A/B test — ${vs.length} ${CHANNEL_META[chs[0] ?? cfg.contentAb.ch].label} template variants on a split audience`;
   }
   if (cfg.fallback) return `Primary ${p} → fallback ${CHANNEL_META[cfg.fallback].label} (on non-delivery)`;
   if (cfg.channels.length > 1) {
@@ -1226,8 +1807,17 @@ export function analyzeBrief(text: string): BriefConfig {
   if (/push notif|\bpush\b/.test(t)) unavailable.push("Push");
   if (/\brcs\b/.test(t)) unavailable.push("RCS");
 
-  // A/B-test framing: split the audience to compare the two channels.
-  const experiment = /a\/b|a-b|ab test|split test|experiment|test two|two variants|head\s?to\s?head/.test(t);
+  // A categorical tier branch (≥2 known option words) paired with an explicit
+  // branch / tier cue means any "A/B" mention is a NESTED arm split (Phase 2),
+  // not a top-level channel experiment — so it must not trip the experiment
+  // detector, which would otherwise disable the whole conditional path.
+  const categoricalBranch =
+    /\bbranch\b|\btier\b|\bsegment\b|\bbased on\b|\bdepending on\b/.test(t) &&
+    SPLIT_ATTRIBUTES.some(
+      (a) =>
+        a.type === "categorical" &&
+        (a.options ?? []).filter((o) => new RegExp(`\\b${o.toLowerCase()}\\b`).test(t)).length >= 2,
+    );
 
   // Conditional-branch framing: route the audience down a Match / Else branch on an
   // attribute ("if VIP send …", "based on tier", "high-value customers get …"). Distinct
@@ -1241,16 +1831,40 @@ export function analyzeBrief(text: string): BriefConfig {
   // Match / Else branch. Detected conservatively via either (a) a high-tier AND a
   // low-tier descriptor both present, or (b) a "split <audience> by/basis <attribute>"
   // phrase paired with a per-segment "for <tier>" — neither fires on a plain
-  // "send both channels to everyone" parallel brief.
+  // "send both channels to everyone" parallel brief. ("mid" reads as a low/other tier,
+  // so a High-LTV / Mid-LTV value split is recognised.)
   const tier = "(ltv|value|potential|spend(?:er|ing)?|tier|worth|priority|engag\\w*|loyal\\w*|customers?|merchants?|members?|users?|accounts?|shoppers?)";
   const highLowDifferential =
     new RegExp(`\\b(high|top|premium|vip|elite|gold|platinum|big|large)[\\s-]?${tier}\\b`).test(t) &&
-    new RegExp(`\\b(low|bottom|basic|standard|regular|small|budget)[\\s-]?${tier}\\b`).test(t);
+    new RegExp(`\\b(low|mid|bottom|basic|standard|regular|small|budget)[\\s-]?${tier}\\b`).test(t);
   const splitByAttribute =
     /\bsplit[^.]{0,40}\b(audience|customers?|merchants?|members?|users?|base|list|segment)\b[^.]{0,24}\b(by|basis|based on|on the basis|depending on|per)\b/.test(t) &&
-    /\bfor\s+(high|low|top|bottom|premium|vip|elite|gold|platinum|loyal|new|existing|big|small)\b/.test(t);
+    /\bfor\s+(high|low|mid|top|bottom|premium|vip|elite|gold|platinum|loyal|new|existing|big|small)\b/.test(t);
+
+  // A/B-test framing: split the WHOLE audience to compare two channels head-to-head.
+  // Suppressed whenever the brief is clearly a branch (a categorical tier branch OR a
+  // numeric high/low value split OR a split-by-attribute) — there the "A/B" is a
+  // NESTED arm split (an opener test inside one branch), not a top-level channel
+  // experiment, and must not disable the conditional path.
+  const branchFraming = categoricalBranch || highLowDifferential || splitByAttribute;
+  // Any A/B framing (single- or multi-channel) draws a visible A/B Split via the
+  // `contentAb` config — a SINGLE-channel A/B tests CONTENT (same-channel template
+  // variants), a MULTI-channel A/B tests CHANNELS (one variant per channel). It is
+  // suppressed under branchFraming, where the "A/B" is a NESTED arm split inside a
+  // branch, not a top-level split. The user names variants/resources on the card.
+  const abKeyword =
+    /a\/b|a-b|ab test|split test|experiment|test two|two variants|head\s?to\s?head/.test(t);
+  const contentNoun =
+    /templates?|messages?|creatives?|copy|copies|openers?|subject lines?|content|variations?|variants?/.test(t);
+  // An A/B keyword ALWAYS draws a visible A/B Split. With >=2 named channels it's
+  // a CHANNEL A/B (one variant per channel, each with its own resource); with a
+  // single channel (or a content noun and no channel) it's a CONTENT A/B on that
+  // channel (same-channel template variants). Either way the variants + resources
+  // are completed on the split's Resolve card — never a bare parallel fan-out.
+  const contentAb = !branchFraming && abKeyword && (detected.length >= 1 || contentNoun);
+
   const conditional =
-    !experiment &&
+    !contentAb &&
     (/\bbased on\b|\bdepending on\b|\bconditional\b|\bbranch\b|\botherwise\b|\belse\s+(?:send|use|route|get|reach|go)|\bif\b[^.]*\b(vip|high.?value|high.?spend|big.?spend|top.?tier|premium|elite|gold|platinum|loyal|tier|spent|spend|over|above|more than|greater|under|below|less than|cart|order|points|engag)\b/.test(t) ||
       highLowDifferential ||
       splitByAttribute);
@@ -1263,6 +1877,11 @@ export function analyzeBrief(text: string): BriefConfig {
   // when a clause names BOTH a tier and at least one channel.
   let branchMatchSeq: Channel[] | undefined;
   let branchElseSeq: Channel[] | undefined;
+  let branchMatchBody: ArmNodeSpec[] | undefined;
+  let branchElseBody: ArmNodeSpec[] | undefined;
+  let branchArms: BranchArm[] | undefined;
+  let preBranchSeq: Channel[] | undefined;
+  let conditionAttribute: string | undefined;
   if (conditional) {
     const seqFromClause = (clause: string): Channel[] => {
       const items: { ch: Channel; idx: number }[] = [];
@@ -1276,7 +1895,7 @@ export function analyzeBrief(text: string): BriefConfig {
       return seq;
     };
     const HIGH = /\b(high|top|premium|vip|elite|gold|platinum|big|large)\b/;
-    const LOW = /\b(low|bottom|basic|standard|regular|small|budget)\b/;
+    const LOW = /\b(low|mid|bottom|basic|standard|regular|small|budget)\b/;
     const clauses = t.split(/\band\b|[,;.]/).map((s) => s.trim()).filter(Boolean);
     const hi = clauses.find((c) => HIGH.test(c) && /whats|voice|call|phone|ivr/.test(c));
     const lo = clauses.find((c) => LOW.test(c) && /whats|voice|call|phone|ivr/.test(c));
@@ -1292,21 +1911,191 @@ export function analyzeBrief(text: string): BriefConfig {
       branchMatchSeq = hiSeq.length ? hiSeq : complement(loSeq);
       branchElseSeq = loSeq.length ? loSeq : complement(hiSeq);
     }
+
+    // Coarse N-way categorical detection: when the brief names ≥2 values of a
+    // known categorical attribute (e.g. FCC tiers Silver/Gold/Platinum/Black),
+    // build one arm per named value. Each arm's channels come from the clause
+    // naming that value; a value with no channel clause defaults to the primary
+    // channel. The user confirms the attribute + per-arm routes on the branch
+    // card — the model never invents the structure. Supersedes the binary arms.
+    let best: { id: string; hits: string[] } | undefined;
+    for (const a of SPLIT_ATTRIBUTES) {
+      if (a.type !== "categorical") continue;
+      const hits = (a.options ?? []).filter((o) => new RegExp(`\\b${o.toLowerCase()}\\b`).test(t));
+      if (hits.length >= 2 && (!best || hits.length > best.hits.length)) best = { id: a.id, hits };
+    }
+    if (best) {
+      // Persist the detected branch attribute so the ConditionalCard opens
+      // pre-selected on it (not a blank picker) and the first-draft builder can
+      // fall back to it. Without this the card defaults to an empty attribute,
+      // and picking a different one silently rebuilds the branch on the wrong
+      // option set — reverting the analyzed N-way split.
+      conditionAttribute = best.id;
+      const defCh = detected[0] ?? "whatsapp";
+      const taken = new Set<string>();
+      // Sentence-level clauses (split on sentence/list separators only, NOT "and").
+      // A single treatment often lists several tiers — "Platinum and Black get
+      // WhatsApp then a voice call". The narrow clauses above split that on "and",
+      // orphaning "platinum" from the channel words. So when an option's narrow
+      // clause names no channel, fall back to the sentence it sits in: the shared
+      // sequence then reaches EVERY named option, not just the last. The narrow
+      // pass still wins first, so a differential sentence ("Silver gets WhatsApp,
+      // Gold gets voice") keeps its per-tier routing.
+      const sentences = t.split(/[;.\n]/).map((s) => s.trim()).filter(Boolean);
+      branchArms = best.hits.map((opt) => {
+        const o = opt.toLowerCase();
+        const narrow = clauses.find((c) => c.includes(o));
+        let seq = narrow ? seqFromClause(narrow) : [];
+        if (!seq.length) {
+          const sentence = sentences.find((s) => s.includes(o));
+          if (sentence) seq = seqFromClause(sentence);
+        }
+        for (const ch of seq) if (!detected.includes(ch)) detected.push(ch);
+        return { id: slugifyArm(opt, taken), label: opt, value: opt, seq: seq.length ? seq : [defCh] };
+      });
+
+      // Coarse rich-shape enrichment (Phases 2-4): scan each arm's sentence for an
+      // A/B split, a post-action state gate, or a per-tier welcome cue and attach an
+      // `ArmNodeSpec[]` body. Conservative: a spec is added only when its keyword
+      // appears in the SAME sentence as the tier, and an arm with no rich cue keeps
+      // its plain channel `seq` (byte-identical Phase 1). The user completes the
+      // detail (variant names, gate outcomes, welcome templates) on the Resolve card.
+      const AB_RE = /a\/b|a-b|ab test|split test|two variants|\bperks\b|\bsavings\b/;
+      const anyAB = AB_RE.test(t);
+      const anyEnroll = /enroll/.test(t);
+      const anyUpgrade = /upgrad/.test(t);
+      const anyWelcome = /welcome to\b/.test(t);
+      if (anyAB || anyEnroll || anyUpgrade || anyWelcome) {
+        branchArms = branchArms.map((arm) => {
+          const s = sentences.find((x) => x.includes((arm.value ?? "").toLowerCase())) ?? "";
+          const body: ArmNodeSpec[] = [];
+          if (anyAB && AB_RE.test(s)) {
+            const abCh = arm.seq[0] ?? defCh;
+            body.push({ type: "abSplit", variants: detectAbVariants(s, abCh) });
+            for (const ch of arm.seq.slice(1)) body.push({ type: "channel", ch });
+          } else {
+            for (const ch of arm.seq) body.push({ type: "channel", ch });
+          }
+          if (anyEnroll && /enroll/.test(s))
+            body.push({ type: "gate", stateId: "enrollment", routes: [{ outcome: "Enrolled", next: "welcome", tier: arm.label }, { outcome: "Not enrolled", next: "continue" }] });
+          if (anyUpgrade && /upgrad/.test(s))
+            body.push({ type: "gate", stateId: "upgrade_gold", routes: [{ outcome: "Upgraded", next: "welcome", tier: "Gold" }, { outcome: "Not upgraded", next: "welcome", tier: arm.label }] });
+          const hasGate = body.some((b) => b.type === "gate");
+          if (!hasGate && anyWelcome && new RegExp(`welcome to\\s+${(arm.value ?? "").toLowerCase()}`).test(t))
+            body.push({ type: "welcome", tier: arm.label });
+          const rich = body.some((b) => b.type !== "channel");
+          return rich ? { ...arm, body } : arm;
+        });
+      }
+    }
+
+    // ---- Leading pre-branch action (voice-led win-back shape) ------------------
+    // Some journeys ACT first and branch on the result: place a voice call, then
+    // route on how it resolved (Example-2's call-disposition split). Detected two
+    // conservative ways: (a) an explicit opener phrase naming a channel ("start /
+    // begin with a call", "place a voice call, then branch on the outcome"), or
+    // (b) the branch is on `call_disposition` — a post-call outcome that by
+    // definition implies an opening call. The opener channel goes on the trunk
+    // (`preBranchSeq`) before the branch; the arms then route on the outcome only.
+    // The user confirms/edits the opening action's template/agent on the card.
+    const openerMatch =
+      t.match(/\b(?:start|begin|open|kick\s?off|lead)\b[^.]{0,32}\b(?:with|by|using)\b[^.]{0,22}\b(voice|call|phone|ivr|whats\s?app|wa)\b/) ??
+      t.match(/\b(?:place|make)\b[^.]{0,18}\b(voice|phone|ivr|call)\b/);
+    if (openerMatch) {
+      preBranchSeq = [/whats|\bwa\b/.test(openerMatch[1]) ? "whatsapp" : "voice"];
+    } else if (best?.id === "call_disposition") {
+      preBranchSeq = ["voice"];
+    }
+    if (preBranchSeq) for (const ch of preBranchSeq) if (!detected.includes(ch)) detected.push(ch);
+
+    // ---- Numeric branch with a nested A/B on an arm (Match high / Else low) ----
+    // Example-1 shape: a value/LTV branch whose HIGH arm runs an A/B split of two
+    // openers before a follow-up (e.g. "reactivate vs winback", then a voice call).
+    // The A/B can equally sit on the LOW arm ("in the low-LTV branch, A/B test the
+    // voice agents before the call"). The "A/B" keyword was suppressed from the
+    // top-level experiment detector above (branchFraming), so the split belongs to
+    // the arm. Attach it as branchMatchBody / branchElseBody — the binary
+    // equivalent of a categorical arm's `body` — keeping the branch a Match / Else
+    // split on its numeric threshold (branchArms stays unset). Only fires when the
+    // arm's own sentence names the A/B; otherwise that arm stays a plain channel
+    // sequence. The user names the variants, per-variant % and each flow on the card.
+    if (!branchArms && (branchMatchSeq?.length || branchElseSeq?.length)) {
+      const AB_ARM_RE = /a\/b|a-b|ab test|split test|two variants|two openers|different\s+(?:agents?|openers?|templates?|messages?|creatives?|scripts?)|\bperks\b|\bsavings\b|reactivate[^.]*winback|winback[^.]*reactivate/;
+      const sents = t.split(/[.\n]/).map((s) => s.trim()).filter(Boolean);
+      // Build one arm's A/B body from the sentence naming that arm's tier: read the
+      // arm's channels (the tier sentence plus an immediate follow-up sentence that
+      // adds a channel and opens no new tier — "…openers; if they don't respond,
+      // then a voice call"), then anchor the split. An A/B that tests "different
+      // agents" splits the arm's VOICE step (each variant a voice agent); otherwise
+      // it splits the opener channel. Remaining channels stay sequential follow-up.
+      const abBodyForArm = (
+        tierRe: RegExp,
+        armSeqFallback: Channel[],
+      ): { seq: Channel[]; body: ArmNodeSpec[] } | undefined => {
+        const sent = sents.find((s) => tierRe.test(s) && AB_ARM_RE.test(s));
+        if (!sent) return undefined;
+        const seq = seqFromClause(sent);
+        const idx = sents.indexOf(sent);
+        for (let j = idx + 1; j < sents.length; j++) {
+          const s = sents[j];
+          if (HIGH.test(s) || LOW.test(s)) break;
+          const more = seqFromClause(s);
+          if (more.length) {
+            for (const ch of more) if (!seq.includes(ch)) seq.push(ch);
+            break;
+          }
+        }
+        // The arm's full channel flow: its routing seq (e.g. "whatsapp followed by
+        // voice") is authoritative for order, so start from it and merge in any
+        // channel the A/B sentence names that the routing clause missed (the
+        // Example-1 case, where the A/B sentence itself carries the channels and the
+        // routing clause set no arm seq). Without this a separate A/B sentence that
+        // only names "voice" would drop the arm's leading WhatsApp.
+        const finalSeq: Channel[] = [...armSeqFallback];
+        for (const ch of seq) if (!finalSeq.includes(ch)) finalSeq.push(ch);
+        if (!finalSeq.length) return undefined;
+        // "different agents" → a voice-agent A/B, so anchor on the arm's voice step;
+        // otherwise split the opener channel (whatsapp openers like reactivate/winback).
+        const testsVoiceAgents = /\bagents?\b/.test(sent) && finalSeq.includes("voice");
+        const abCh: Channel = testsVoiceAgents ? "voice" : finalSeq[0];
+        const body: ArmNodeSpec[] = finalSeq.map((ch) =>
+          ch === abCh
+            ? ({ type: "abSplit", variants: detectAbVariants(sent, abCh) } as ArmNodeSpec)
+            : ({ type: "channel", ch } as ArmNodeSpec),
+        );
+        return { seq: finalSeq, body };
+      };
+      const hiAb = abBodyForArm(HIGH, branchMatchSeq ?? []);
+      if (hiAb) {
+        branchMatchSeq = hiAb.seq;
+        branchMatchBody = hiAb.body;
+        for (const ch of hiAb.seq) if (!detected.includes(ch)) detected.push(ch);
+      }
+      const loAb = abBodyForArm(LOW, branchElseSeq ?? []);
+      if (loAb) {
+        branchElseSeq = loAb.seq;
+        branchElseBody = loAb.body;
+        for (const ch of loAb.seq) if (!detected.includes(ch)) detected.push(ch);
+      }
+    }
   }
 
   if (detected.length === 0) detected.push("whatsapp");
-  // An experiment needs two arms — add the other channel if only one was named.
-  if (experiment && detected.length === 1) {
-    detected.push(detected[0] === "whatsapp" ? "voice" : "whatsapp");
-  }
 
   let primary = detected[0];
   let fallback: Channel | null = null;
 
   // A fallback is only assumed when the brief actually calls one out (and not in
-  // an experiment). Multiple channels with no fallback → parallel/split, not a chain.
-  const mentionsFallback = /fall\s?back|if .*(?:fail|not delivered|undelivered|no reply|doesn'?t)/.test(t);
-  if (!experiment && !conditional && mentionsFallback && detected.length >= 2) {
+  // an A/B test). Multiple channels with no fallback → parallel/split, not a chain.
+  // Two cues count: (a) the literal "fallback" / an "if <non-delivery>" clause, and
+  // (b) a natural non-response follow-up — "if they haven't responded", "on no reply",
+  // "for non-responders", "if they don't pick up" — the way a lapsed-customer
+  // reactivation brief actually reads. Without (b) that phrasing drops to a parallel
+  // split, losing the wait + second-touch the campaign intends. Still gated by
+  // !conditional (an in-arm "if they don't respond" stays a branch, not a fallback).
+  const nonResponse = /non-?responders?|\b(?:no|without)\s+(?:reply|response|answer)\b|(?:haven'?t|hasn'?t|didn'?t|don'?t|doesn'?t|never|not)\s+(?:respond(?:ed|s)?|repl(?:y|ied|ies)|answer(?:ed|s)?|pick(?:ed)?\s?up|engag\w*)/;
+  const mentionsFallback = /fall\s?back|if .*(?:fail|not delivered|undelivered|no reply|doesn'?t)/.test(t) || nonResponse.test(t);
+  if (!contentAb && !conditional && mentionsFallback && detected.length >= 2) {
     // Pin the fallback channel from explicit phrasing: prefer "<channel> fallback"
     // (channel right before the word), then "fallback to/on/via <channel>".
     const toChannel = (s: string): Channel => (/whats/.test(s) ? "whatsapp" : "voice");
@@ -1322,6 +2111,12 @@ export function analyzeBrief(text: string): BriefConfig {
   const ordered = fallback
     ? [primary, fallback]
     : [primary, ...detected.filter((c) => c !== primary)];
+  // A/B test config: with >=2 channels seed one variant PER channel (channel A/B);
+  // with a single channel seed N same-channel template variants (content A/B). The
+  // user confirms names/resources/percents on the Resolve card (never invented).
+  const contentAbCfg = contentAb
+    ? { ch: primary, variants: ordered.length >= 2 ? channelAbVariants(ordered) : detectAbVariants(t, primary) }
+    : undefined;
   return {
     channels: ordered,
     primary,
@@ -1329,33 +2124,46 @@ export function analyzeBrief(text: string): BriefConfig {
     fallbackWait: "1 day",
     channelsNamed,
     ...(unavailable.length ? { unavailable } : {}),
-    ...(experiment ? { experiment: true } : {}),
+    ...(contentAbCfg ? { contentAb: contentAbCfg } : {}),
     ...(conditional ? { conditional: true } : {}),
-    ...(branchMatchSeq ? { branchMatchSeq } : {}),
-    ...(branchElseSeq ? { branchElseSeq } : {}),
+    ...(branchArms ? { branchArms } : {}),
+    ...(branchMatchSeq && !branchArms ? { branchMatchSeq } : {}),
+    ...(branchElseSeq && !branchArms ? { branchElseSeq } : {}),
+    ...(branchMatchBody && !branchArms ? { branchMatchBody } : {}),
+    ...(branchElseBody && !branchArms ? { branchElseBody } : {}),
+    ...(preBranchSeq ? { preBranchSeq } : {}),
+    ...(conditionAttribute ? { conditionAttribute } : {}),
   };
 }
 
 /** Build a brief plan from confirmed channel config. Gaps surface in the Resolve card. */
 export function planFromBrief(text: string, cfg: BriefConfig): BriefPlan {
   const name = briefName(text);
-  const isParallel = !cfg.conditional && !cfg.fallback && cfg.channels.length > 1;
+  const isParallel = !cfg.conditional && !cfg.fallback && !cfg.contentAb && cfg.channels.length > 1;
   const plan = cfg.conditional
     ? buildConditionalChannels(name, cfg, {})
-    : isParallel
-      ? buildParallelChannels(name, cfg, {})
-      : buildFromChannels(name, cfg, {});
+    : cfg.contentAb
+      ? buildContentAbChannels(name, cfg, {})
+      : isParallel
+        ? buildParallelChannels(name, cfg, {})
+        : buildFromChannels(name, cfg, {});
   const line = channelsSummary(cfg);
   const condElse = cfg.channels.find((c) => c !== cfg.primary);
   const assumptions = [
     ...(cfg.fallback ? [`Fallback wait defaulted to ${durationLabel(cfg.fallbackWait)}`] : []),
     ...(cfg.conditional
-      ? [`Match branch defaults to ${cfg.branchMatchSeq?.length ? cfg.branchMatchSeq.map((c) => CHANNEL_META[c].label).join(" → ") : CHANNEL_META[cfg.primary].label}; Else to ${cfg.branchElseSeq?.length ? cfg.branchElseSeq.map((c) => CHANNEL_META[c].label).join(" → ") : condElse ? CHANNEL_META[condElse].label : "End"} until you set the branch rule`]
-      : cfg.experiment
-        ? [`A/B test defaulted to a 50/50 split between ${cfg.channels.map((c) => CHANNEL_META[c].label).join(" & ")}`]
+      ? [`Branch 1 defaults to ${cfg.branchMatchSeq?.length ? cfg.branchMatchSeq.map((c) => CHANNEL_META[c].label).join(" → ") : CHANNEL_META[cfg.primary].label}; Branch 2 to ${cfg.branchElseSeq?.length ? cfg.branchElseSeq.map((c) => CHANNEL_META[c].label).join(" → ") : condElse ? CHANNEL_META[condElse].label : "End"} until you set the branch rule`]
+      : cfg.contentAb
+        ? (() => {
+            const vs = cfg.contentAb.variants;
+            const chs = Array.from(new Set(vs.map((v) => v.ch)));
+            return chs.length > 1
+              ? [`A/B test defaulted to an even split between ${chs.map((c) => CHANNEL_META[c].label).join(" & ")} until you set each variant's resource`]
+              : [`A/B test defaulted to an even split across ${vs.length} ${CHANNEL_META[chs[0] ?? cfg.contentAb.ch].label} template variants until you set the templates`];
+          })()
         : isParallel
-          ? [`${cfg.channels.map((c) => CHANNEL_META[c].label).join(" & ")} both target the full segment until you set a split rule`]
-          : []),
+            ? [`${cfg.channels.map((c) => CHANNEL_META[c].label).join(" & ")} both target the full segment until you set a split rule`]
+            : []),
     `Sending window ${TENANT_DEFAULTS.windowStart}–${TENANT_DEFAULTS.windowEnd} ${TENANT_DEFAULTS.timezone}`,
     `Frequency cap ${TENANT_DEFAULTS.freqCap}`,
   ];
@@ -1453,39 +2261,6 @@ export function applySplit(
     if (n.id === otherNode) {
       const base = (n.data.subtitle ?? "").replace(stripBranch, "");
       return { ...n, data: { ...n.data, subtitle: `${base} · ${otherCut}` } };
-    }
-    return n;
-  });
-  return { ...plan, nodes };
-}
-
-/**
- * Annotate a parallel plan as a channel A/B experiment: the audience node shows
- * the random split (P% to the priority channel, the rest to the other) and each
- * channel node carries its share. `pct` is the priority channel's percentage.
- * Same node IDs as the parallel build.
- */
-export function applyExperiment(plan: AskPiPlan, pct: string, channels: Channel[]): AskPiPlan {
-  const p = Math.max(0, Math.min(100, Number(pct)));
-  if (Number.isNaN(p)) return plan;
-  const other = 100 - p;
-  const priorityNode = channels[0] ? CHANNEL_NODE_ID[channels[0]] : null;
-  const otherNode = channels[1] ? CHANNEL_NODE_ID[channels[1]] : null;
-  const pLabel = channels[0] ? CHANNEL_META[channels[0]].label : "A";
-  const oLabel = channels[1] ? CHANNEL_META[channels[1]].label : "B";
-  const stripBranch = / · \d+%.*$/;
-  const nodes = plan.nodes.map((n) => {
-    if (n.data.kind === "audience") {
-      const base = (n.data.subtitle ?? "").replace(/ · A\/B:.*$/, "");
-      return { ...n, data: { ...n.data, subtitle: `${base} · A/B: ${p}% ${pLabel} / ${other}% ${oLabel}` } };
-    }
-    if (n.id === priorityNode) {
-      const base = (n.data.subtitle ?? "").replace(stripBranch, "");
-      return { ...n, data: { ...n.data, subtitle: `${base} · ${p}% of audience` } };
-    }
-    if (n.id === otherNode) {
-      const base = (n.data.subtitle ?? "").replace(stripBranch, "");
-      return { ...n, data: { ...n.data, subtitle: `${base} · ${other}% of audience` } };
     }
     return n;
   });
@@ -1630,6 +2405,50 @@ export function runChecks(
     checks.push({ id: `followup_${v.key}`, label: v.label, status: "pass", detail: `Follows up only when WhatsApp = ${chosen}; other outcomes end the journey.` });
   }
 
+  // 3c. Rich arm steps (conditional path) — a nested A/B split's traffic shares
+  // (grouped per split node: each variant 1–99% and summing to 100), each
+  // variant's plain-English post-split flow, and each state gate's per-outcome
+  // routing, so the checklist mirrors the canvas.
+  const abGroups = new Map<string, { armLabel: string; shares: { label: string; pct: number }[] }>();
+  const abKeyRe = /^splitPct@(.+_ab\d+)_(.+)$/;
+  for (const v of vars) {
+    if (v.kind !== "percent") continue;
+    const m = abKeyRe.exec(v.key);
+    if (!m) continue;
+    const raw = resolved[v.key]?.trim() || v.default;
+    const p = Number(raw);
+    const armLabel = v.label.split(" · ")[0];
+    const variantLabel = v.label.split(" · ")[1] ?? "Variant";
+    const g = abGroups.get(m[1]) ?? { armLabel, shares: [] };
+    g.shares.push({ label: variantLabel, pct: Number.isFinite(p) ? p : NaN });
+    abGroups.set(m[1], g);
+  }
+  for (const [node, g] of abGroups) {
+    const sum = g.shares.reduce((s, x) => s + (Number.isNaN(x.pct) ? 0 : x.pct), 0);
+    const bad = g.shares.some((x) => Number.isNaN(x.pct) || x.pct < 1 || x.pct > 99) || sum !== 100;
+    const shareLabel = g.shares.map((x) => `${x.label} ${Number.isNaN(x.pct) ? "?" : x.pct}%`).join(" · ");
+    checks.push(
+      bad
+        ? { id: `abpct_${node}`, label: `${g.armLabel} · A/B traffic split`, status: "warn", detail: `${shareLabel} (total ${sum}%). Give each variant 1–99% and make the shares total 100%.` }
+        : { id: `abpct_${node}`, label: `${g.armLabel} · A/B traffic split`, status: "pass", detail: `${shareLabel} — ${g.shares.length} variants totalling 100%.` },
+    );
+  }
+  for (const v of vars) {
+    if (v.kind === "text" && v.key.startsWith("abFlow@")) {
+      const txt = resolved[v.key]?.trim() || v.default;
+      checks.push(
+        txt
+          ? { id: `abflow_${v.key}`, label: v.label, status: "pass", detail: `Post-split flow: ${txt}` }
+          : { id: `abflow_${v.key}`, label: v.label, status: "block", detail: "State in plain English what happens on this variant after the split." },
+      );
+    }
+    if (v.kind === "choice" && v.key.startsWith("gateRoute@")) {
+      const chosen = resolved[v.key]?.trim() || v.default;
+      const dest = chosen === "welcome" ? "a welcome message" : chosen === "end" ? "the End" : "the next step";
+      checks.push({ id: `gate_${v.key}`, label: v.label, status: "pass", detail: `Routes to ${dest}.` });
+    }
+  }
+
   // 4. Channel sequence — distinct channels in priority order.
   const seqLabel = channels.map((c) => CHANNEL_META[c].label).join(" → ");
   checks.push({
@@ -1638,22 +2457,6 @@ export function runChecks(
     status: "pass",
     detail: channels.length >= 2 ? `${seqLabel} — distinct channels.` : `${seqLabel || "WhatsApp"} only — no fallback.`,
   });
-
-  // 4b. Channel A/B experiment — required when the journey declares a percentage
-  // split between the two channels. Needs a percentage in 1–99.
-  if (vars.some((v) => v.kind === "percent")) {
-    const raw = resolved.splitPct;
-    const p = Number(raw);
-    const priorityLabel = channels[0] ? CHANNEL_META[channels[0]].label : "channel A";
-    const otherLabel = channels[1] ? CHANNEL_META[channels[1]].label : "channel B";
-    checks.push(
-      !raw || Number.isNaN(p)
-        ? { id: "experiment", label: "A/B split", status: "block", detail: "Set the % of the audience for the priority channel." }
-        : p < 1 || p > 99
-          ? { id: "experiment", label: "A/B split", status: "block", detail: "Split must be between 1% and 99% so both arms get traffic." }
-          : { id: "experiment", label: "A/B split", status: "pass", detail: `${p}% → ${priorityLabel}; ${100 - p}% → ${otherLabel} (random).` },
-    );
-  }
 
   // 4c. Audience split — required when the journey declares an attribute split
   // (parallel channels, no fallback). Numeric attributes need a threshold;
@@ -1682,28 +2485,46 @@ export function runChecks(
   }
 
   // 4d. Conditional branch — required when the journey declares a condition
-  // attribute (audience routed Match / Else on an attribute). Numeric attributes
-  // need a threshold, categorical attributes a value; the Match / Else routing
-  // (a channel or End) is reported for confirmation.
+  // attribute (audience routed on an attribute). Three shapes:
+  //  - N-way categorical: one route per attribute value, stored as
+  //    `branchRoute@<armSlug>` (slug deterministic over `attr.options`); each arm
+  //    gets its own pass/block check.
+  //  - binary categorical: a single Match value (the rest take Else).
+  //  - numeric: a threshold (≥ Match, below Else).
+  // The routing (a channel sequence or End) is reported for confirmation.
   if (vars.some((v) => v.key === "conditionAttribute")) {
     const attr = findSplitAttribute(resolved.conditionAttribute);
+    const isNway = Object.keys(resolved).some((k) => k.startsWith("branchRoute@"));
     const otherCh = channels.find((c) => c !== channels[0]);
-    const matchTo = routeSeqLabel(resolved.branchMatch, channels[0] ? CHANNEL_META[channels[0]].label : "Match branch");
+    const matchTo = routeSeqLabel(resolved.branchMatch, channels[0] ? CHANNEL_META[channels[0]].label : "Branch 1");
     const elseTo = routeSeqLabel(resolved.branchElse, otherCh ? CHANNEL_META[otherCh].label : "End");
     if (!attr) {
       checks.push({ id: "condition", label: "Conditional branch", status: "block", detail: "Pick an attribute to branch the audience on." });
+    } else if (attr.type === "categorical" && isNway) {
+      // Reconstruct arm slugs from the attribute's options (same order +
+      // de-collision the card / builder used) and report each arm's route.
+      const taken = new Set<string>();
+      for (const opt of attr.options ?? []) {
+        const slug = slugifyArm(opt, taken);
+        const route = resolved[`branchRoute@${slug}`];
+        checks.push(
+          !route
+            ? { id: `condition_${slug}`, label: `Branch · ${opt}`, status: "block", detail: `Set where ${attr.label} = ${opt} routes.` }
+            : { id: `condition_${slug}`, label: `Branch · ${opt}`, status: "pass", detail: `${attr.label} = ${opt} → ${routeSeqLabel(route, "End")}.` },
+        );
+      }
     } else if (attr.type === "categorical") {
       const val = resolved.conditionValue;
       checks.push(
         !val
-          ? { id: "condition", label: "Conditional branch", status: "block", detail: `Pick which ${attr.label.toLowerCase()} takes the Match branch.` }
+          ? { id: "condition", label: "Conditional branch", status: "block", detail: `Pick which ${attr.label.toLowerCase()} takes Branch 1.` }
           : { id: "condition", label: "Conditional branch", status: "pass", detail: `${attr.label} = ${val} → ${matchTo}; everyone else → ${elseTo}.` },
       );
     } else {
       const thr = resolved.conditionThreshold;
       checks.push(
         !thr || Number.isNaN(Number(thr))
-          ? { id: "condition", label: "Conditional branch", status: "block", detail: "Set a numeric threshold for the Match branch." }
+          ? { id: "condition", label: "Conditional branch", status: "block", detail: "Set a numeric threshold for Branch 1." }
           : { id: "condition", label: "Conditional branch", status: "pass", detail: `${attr.label} ≥ ${attr.unit}${thr} → ${matchTo}; below → ${elseTo}.` },
       );
     }

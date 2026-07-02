@@ -14,8 +14,9 @@ import {
   SEGMENTS, WA_TEMPLATES, VOICE_AGENTS, SPLIT_ATTRIBUTES,
   CHANNEL_META,
   matchTemplate, planFromBrief, analyzeBrief, suggestTemplates, channelsSummary,
-  applyResolved, applyRefinement, applySplit, applyExperiment, validateResolved, runChecks,
-  splitFieldsFor, experimentVars, findSplitAttribute,
+  applyResolved, applyRefinement, applySplit, buildContentAbChannels, channelAbVariants,
+  validateResolved, runChecks,
+  splitFieldsFor, findSplitAttribute,
   type CampaignTemplate, type BriefPlan, type TemplateVar,
   type BriefConfig, type Channel, type ValidationCheck,
 } from "@/lib/tenant-registry";
@@ -49,6 +50,15 @@ type SplitChoice = "split" | "broadcast" | "experiment" | null;
 
 let _mid = 0;
 const nextId = () => `m${++_mid}`;
+
+// The single percentage field the wizard's A/B (channel-experiment) split card
+// captures — % of the audience to the priority channel. The remaining traffic
+// goes to the other channel. Node-scoped per-variant capture (as the agent flow
+// uses) is unnecessary here because both variants inherit the globally-resolved
+// channel resource; this card only needs the split ratio.
+const EXPERIMENT_VARS: TemplateVar[] = [
+  { key: "splitPct", kind: "percent", label: "% of audience to the priority channel (A/B)", default: "50", required: true },
+];
 
 /* ----------------------------------------------------------------- */
 /* Conversational engine                                             */
@@ -85,7 +95,7 @@ export function AskPiConversation({
   // to the full segment.
   const [splitChoice, setSplitChoice] = useState<SplitChoice>(null);
   // Which logical step of the Resolve card is showing. Open variables are
-  // partitioned by `group` (Audience / Match arm / Else arm / Sending rules …);
+  // partitioned by `group` (Audience / Branch 1 arm / Branch 2 arm / Sending rules …);
   // a single group degrades to the original one-shot capture.
   const [resolveStep, setResolveStep] = useState(0);
 
@@ -221,7 +231,7 @@ export function AskPiConversation({
 
   function enterJourney() {
     const labels = channels.map((c) => CHANNEL_META[c].label).join(" and ");
-    const abHint = briefConfig?.experiment ? " — sounds like an A/B test" : "";
+    const abHint = briefConfig?.contentAb ? " — sounds like an A/B test" : "";
     pushPi(`You've picked ${labels} with no fallback${abHint}. How should the audience flow through them — A/B test the two channels, split by an audience attribute, or reach everyone on both?`);
     setPhase("journey");
   }
@@ -280,7 +290,7 @@ export function AskPiConversation({
   const splitFields = useMemo<TemplateVar[]>(
     () =>
       splitChoice === "experiment"
-        ? experimentVars()
+        ? EXPERIMENT_VARS
         : splitFieldsFor(resolved.splitAttribute),
     [splitChoice, resolved.splitAttribute],
   );
@@ -388,7 +398,7 @@ export function AskPiConversation({
       const split = choice === "split";
       const experiment = choice === "experiment";
       const extra = experiment
-        ? experimentVars()
+        ? EXPERIMENT_VARS
         : split
           ? splitFieldsFor(resolvedRef.current.splitAttribute)
           : [];
@@ -402,7 +412,18 @@ export function AskPiConversation({
       const base = pendingPlanRef.current!;
       let patched = applyResolved(base, resolvedRef.current);
       if (experiment) {
-        patched = applyExperiment(patched, resolvedRef.current.splitPct, channelsRef.current);
+        // A CHANNEL A/B: draw a visible A/B Split whose variants are the two
+        // channels (each inheriting its globally-resolved resource via
+        // channelNode's node-scoped fallback), splitting on the captured %.
+        const chs = channelsRef.current;
+        const abCfg: BriefConfig = {
+          channels: chs,
+          primary: chs[0],
+          fallback: null,
+          fallbackWait: "1 day",
+          contentAb: { ch: chs[0], variants: channelAbVariants(chs, resolvedRef.current.splitPct) },
+        };
+        patched = buildContentAbChannels(base.name, abCfg, resolvedRef.current);
       } else if (split) {
         const attr = findSplitAttribute(resolvedRef.current.splitAttribute);
         const value = attr?.type === "categorical"
@@ -670,7 +691,7 @@ export function AskPiConversation({
             </div>
 
             {/* Priority + Fallback. A conditional brief routes by an audience
-                attribute (Match / Else), so a delivery-failure fallback doesn't
+                attribute (Branch 1 / Branch 2), so a delivery-failure fallback doesn't
                 apply — the split is owned by the branch rule resolved next. */}
             <div className={cn("mt-3 grid gap-2.5", briefConfig.conditional ? "grid-cols-1" : "grid-cols-2")}>
               <div>
@@ -704,7 +725,7 @@ export function AskPiConversation({
               <div className="mt-2 flex items-start gap-1.5 rounded-lg border border-ai/25 bg-ai/[0.04] px-2.5 py-2">
                 <GitBranch className="mt-0.5 h-3 w-3 shrink-0 text-ai" />
                 <p className="text-[11px] leading-snug text-muted-foreground">
-                  This brief splits the audience by an attribute (Match / Else). You'll set the branch rule
+                  This brief splits the audience by an attribute (Branch 1 / Branch 2). You'll set the branch rule
                   next — there's no delivery-failure fallback to choose here.
                 </p>
               </div>
